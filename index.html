@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tracker Digestivo Clínico</title>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f3f4f6; padding: 8px; padding-bottom: 70px; display: flex; flex-direction: column; align-items: center; margin: 0; box-sizing: border-box;}
+    .card { background: white; padding: 15px; border-radius: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); width: 100%; max-width: 400px; box-sizing: border-box; margin-bottom: 10px;}
+    button { color: white; border: none; padding: 12px 15px; border-radius: 10px; font-size: 16px; width: 100%; font-weight: bold; cursor: pointer; margin-top: 5px; background-color: #3b82f6;}
+    button.stop { background-color: #ef4444; }
+    button.save { background-color: #10b981; }
+    button.secondary { background-color: #6b7280; margin-top: 5px;}
+    button.danger, button.edit { padding: 6px 10px; font-size: 11px; width: auto; display: inline-block; margin-top: 5px; }
+    button.danger { background-color: #dc2626; } button.edit { background-color: #f59e0b; margin-right: 5px;}
+    select, input { width: 100%; padding: 10px; margin-top: 4px; margin-bottom: 10px; border-radius: 8px; border: 1px solid #ccc; font-size: 14px; box-sizing: border-box; }
+    .hidden { display: none !important; }
+    h2 { color: #1f2937; margin-top: 0; margin-bottom: 8px; font-size: 18px; }
+    .nav-bar { position: fixed; bottom: 0; left: 0; right: 0; background: white; box-shadow: 0 -2px 10px rgba(0,0,0,0.1); display: flex; justify-content: space-around; padding: 8px 0; z-index: 100;}
+    .nav-item { border: none; background: none; color: #6b7280; font-size: 11px; display: flex; flex-direction: column; align-items: center; cursor: pointer; padding: 0; margin: 0;}
+    .nav-item.active { color: #3b82f6; font-weight: bold; }
+    .nav-icon { font-size: 20px; margin-bottom: 2px; }
+    .timer-display { font-family: monospace; font-size: 34px; font-weight: bold; color: #3b82f6; margin: 10px 0; background: #eff6ff; padding: 8px; border-radius: 10px; text-align: center;}
+    .grid-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 5px; margin-bottom: 5px; text-align: center; }
+    .stat-box { background: #f9fafb; padding: 8px; border-radius: 8px; border-top: 3px solid #3b82f6;}
+    .stat-box.alert { border-top-color: #ef4444; background: #fef2f2; padding: 6px;}
+    .stat-lbl { font-size: 9px; text-transform: uppercase; font-weight: bold; color: #6b7280; display: block; letter-spacing: -0.3px;}
+    .stat-val { font-size: 14px; font-weight: bold; color: #1f2937; margin-top: 2px; }
+    .history-item { text-align: left; background: #f9fafb; padding: 10px; border-radius: 8px; margin-bottom: 8px; border-left: 4px solid #cbd5e1; font-size: 12px;}
+    .badge { display: inline-block; padding: 2px 5px; border-radius: 4px; font-size: 10px; font-weight: bold; color: white; background: #6b7280;}
+    .badge.blood { background: #dc2626; } .badge.gas { background: #9333ea; } .badge.pain { background: #ea580c; }
+    .flex-row { display: flex; gap: 8px; margin-bottom: 10px; align-items: flex-start;}
+    .flex-col { flex: 1; display: flex; flex-direction: column; }
+    .flex-col label { margin-bottom: 2px; font-size: 12px; }
+    .flex-row input { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+
+  <div id="tab-home" class="tab-content" style="width:100%; max-width:400px;">
+    <div id="track-start" class="card">
+      <h2>Tracker Digestivo 🩺</h2>
+      <button onclick="startTracking()" style="padding: 10px 15px;">Nueva Entrada al Baño</button>
+    </div>
+    
+    <div id="track-process" class="card hidden">
+      <h2>En proceso... ⏳</h2>
+      <div id="live-timer" class="timer-display">00:00</div>
+      <button class="stop" onclick="finishTracking()">Finalizar Entrada</button>
+    </div>
+    
+    <div id="track-form" class="card hidden">
+      <h2>Evaluación Médica</h2>
+      <div style="text-align: left;">
+        <label style="font-size: 13px;">Categoría:</label>
+        <select id="category" onchange="toggleBristol('category', 'bristol-group')">
+          <option value="Deposición completa" selected>Deposición completa</option>
+          <option value="Solo gases">Solo gases</option>
+          <option value="Intento fallido / Falsa alarma">Intento fallido</option>
+        </select>
+        <div id="bristol-group">
+          <label style="font-size: 13px;">Escala Bristol:</label>
+          <select id="type">
+            <option value="Tipo 4: Salchicha lisa y suave (Ideal)">Tipo 4: Salchicha lisa</option>
+            <option value="Tipo 1: Bolitas duras separadas">Tipo 1: Bolitas duras</option>
+            <option value="Tipo 2: Forma de salchicha grumosa">Tipo 2: Salchicha grumosa</option>
+            <option value="Tipo 3: Salchicha con grietas">Tipo 3: Salchicha con grietas</option>
+            <option value="Tipo 5: Trozos blandos">Tipo 5: Trozos blandos</option>
+            <option value="Tipo 6: Acuosa / Puré">Tipo 6: Acuosa / Puré</option>
+            <option value="Tipo 7: Diarrea líquida">Tipo 7: Diarrea líquida</option>
+          </select>
+        </div>
+        <label style="font-size: 13px;">¿Dolor?</label><select id="pain"><option value="No">No</option><option value="Sí">Sí</option></select>
+        <label style="font-size: 13px;">¿Urgencia?</label><select id="urgency"><option value="No">No</option><option value="Sí">Sí</option></select>
+        <label style="color:#dc2626; font-weight:bold; font-size: 13px;">⚠️ ¿Sangre?</label><select id="blood"><option value="No">No</option><option value="Sí">Sí</option></select>
+      </div>
+      <button class="save" onclick="saveNewRecord()">Guardar Registro</button>
+      <p id="status-track"></p>
+    </div>
+
+    <div id="dashboard-section" class="card">
+      <h2 style="margin-bottom: 8px;">Mi Resumen 📊</h2>
+      <div id="blood-banner" class="stat-box alert hidden"><span class="stat-lbl" style="color:#dc2626;">🚨 SANGRE REGISTRADA</span></div>
+      <div class="grid-stats">
+        <div class="stat-box" style="border-top-color:#10b981; background:#ecfdf5;"><span class="stat-lbl">T. Hoy</span><div id="dash-tToday" class="stat-val">...</div></div>
+        <div class="stat-box" style="border-top-color:#10b981; background:#ecfdf5;"><span class="stat-lbl">Veces Hoy</span><div id="dash-vToday" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Media Veces/Día</span><div id="dash-gDailyVisits" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">T. Medio/Día</span><div id="dash-gDailyAvg" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">T. Visita (Mes)</span><div id="dash-mTime" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">T. Visita (Total)</span><div id="dash-gTime" class="stat-val">...</div></div>
+        <div class="stat-box" style="border-top-color:#9333ea;"><span class="stat-lbl">Gases Mes</span><div id="dash-mGas" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Dolor Mes</span><div id="dash-mPain" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Urgencia Mes</span><div id="dash-mUrgent" class="stat-val">...</div></div>
+      </div>
+      <div id="dash-topTypes" style="background:#f9fafb; padding:8px; border-radius:6px; font-size:11px; margin-top:8px; border: 1px solid #e5e7eb; display:flex; justify-content:space-evenly; color:#4b5563;">
+        Cargando tendencias...
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-history" class="tab-content hidden" style="width:100%; max-width:400px;">
+    <div class="card">
+      <h2>Historial Clínico</h2>
+      <button class="save" onclick="openNewRecordForm()">+ Registro Manual</button>
+      
+      <div id="editor-box" class="hidden" style="margin-top:15px; border-top:2px solid #e5e7eb; padding-top:15px; text-align:left;">
+        <input type="hidden" id="edit-id">
+        <label style="font-size: 13px;">Fecha (DD/MM/YYYY):</label><input type="text" id="edit-day">
+        <div class="flex-row">
+          <div class="flex-col"><label>Inicio:</label><input type="time" id="edit-start" step="1" onchange="calculateEditDuration()"></div>
+          <div class="flex-col"><label>Fin:</label><input type="time" id="edit-end" step="1" onchange="calculateEditDuration()"></div>
+          <div class="flex-col" style="flex: 1.2;"><label>Duración:</label><input type="text" id="edit-duration" placeholder="0m 0s" oninput="calculateEndTimeFromDuration()"></div>
+        </div>
+        <label style="font-size: 13px;">Categoría:</label>
+        <select id="edit-category" onchange="toggleBristol('edit-category', 'edit-bristol-group')">
+          <option value="Deposición completa">Deposición completa</option>
+          <option value="Solo gases">Solo gases</option>
+          <option value="Intento fallido / Falsa alarma">Intento fallido</option>
+        </select>
+        <div id="edit-bristol-group">
+          <label style="font-size: 13px;">Tipo Bristol:</label>
+          <select id="edit-type">
+            <option value="Tipo 4: Salchicha lisa y suave (Ideal)">Tipo 4: Salchicha lisa</option>
+            <option value="Tipo 1: Bolitas duras separadas">Tipo 1: Bolitas duras</option>
+            <option value="Tipo 2: Forma de salchicha grumosa">Tipo 2: Salchicha grumosa</option>
+            <option value="Tipo 3: Salchicha con grietas">Tipo 3: Salchicha con grietas</option>
+            <option value="Tipo 5: Trozos blandos">Tipo 5: Trozos blandos</option>
+            <option value="Tipo 6: Acuosa / Puré">Tipo 6: Acuosa / Puré</option>
+            <option value="Tipo 7: Diarrea líquida">Tipo 7: Diarrea líquida</option>
+            <option value="No aplica">No aplica</option>
+          </select>
+        </div>
+        <label style="font-size: 13px;">¿Dolor?</label><select id="edit-pain"><option value="No">No</option><option value="Sí">Sí</option></select>
+        <label style="font-size: 13px;">¿Urgencia?</label><select id="edit-urgency"><option value="No">No</option><option value="Sí">Sí</option></select>
+        <label style="font-size: 13px;">¿Sangre?</label><select id="edit-blood"><option value="No">No</option><option value="Sí">Sí</option></select>
+        <button class="save" onclick="saveRecordEdit()">Aplicar Cambios</button>
+        <button class="secondary" onclick="closeEditor()">Cancelar</button>
+      </div>
+    </div>
+    <div id="history-list">Cargando...</div>
+  </div>
+
+  <div class="nav-bar">
+    <button class="nav-item active" id="btn-nav-home" onclick="switchTab('home')"><span class="nav-icon">🏠</span>Inicio</button>
+    <button class="nav-item" id="btn-nav-history" onclick="switchTab('history')"><span class="nav-icon">📅</span>Historial</button>
+  </div>
+
+  <script>
+    // --- CONFIGURACIÓN SUPABASE ---
+    const SUPABASE_URL = 'TU_URL_DE_SUPABASE_AQUI'; 
+    const SUPABASE_KEY = 'TU_CLAVE_ANON_PUBLICA_AQUI';
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    var timerInterval; 
+    var rawRecords = [];
+
+    window.onload = function() {
+      if (localStorage.getItem('poop_startTime') && !localStorage.getItem('poop_endTime')) {
+        switchTab('home'); hideAllTrackScreens(); document.getElementById('track-process').classList.remove('hidden'); startLiveTimer();
+      } else if (localStorage.getItem('poop_startTime') && localStorage.getItem('poop_endTime')) {
+        switchTab('home'); hideAllTrackScreens(); document.getElementById('track-form').classList.remove('hidden');
+      } else { 
+        switchTab('home'); 
+      }
+    };
+
+    function switchTab(t) {
+      document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+      document.getElementById('tab-'+t).classList.remove('hidden'); document.getElementById('btn-nav-'+t).classList.add('active');
+      fetchDataAndRender(t);
+    }
+
+    function hideAllTrackScreens() {
+      document.getElementById('track-start').classList.add('hidden'); 
+      document.getElementById('track-process').classList.add('hidden'); 
+      document.getElementById('track-form').classList.add('hidden');
+      document.getElementById('dashboard-section').classList.add('hidden');
+    }
+
+    function startLiveTimer() {
+      if (timerInterval) clearInterval(timerInterval);
+      timerInterval = setInterval(function() {
+        const s = parseInt(localStorage.getItem('poop_startTime')); if (!s) return;
+        const diff = new Date().getTime() - s;
+        const m = Math.floor(diff / 60000); const sec = Math.floor((diff % 60000) / 1000);
+        document.getElementById('live-timer').innerText = (m < 10 ? '0'+m : m) + ':' + (sec < 10 ? '0'+sec : sec);
+      }, 1000);
+    }
+
+    function startTracking() { 
+      localStorage.setItem('poop_startTime', new Date().getTime()); 
+      hideAllTrackScreens(); document.getElementById('track-process').classList.remove('hidden'); startLiveTimer(); 
+    }
+
+    function finishTracking() { 
+      clearInterval(timerInterval); localStorage.setItem('poop_endTime', new Date().getTime()); 
+      hideAllTrackScreens(); document.getElementById('track-form').classList.remove('hidden'); 
+    }
+    
+    function toggleBristol(selectId, groupId) {
+      const cat = document.getElementById(selectId).value;
+      document.getElementById(groupId).style.display = (cat === 'Solo gases' || cat === 'Intento fallido / Falsa alarma') ? 'none' : 'block';
+    }
+
+    // --- CONEXIÓN A SUPABASE ---
+    async function fetchDataAndRender(tab) {
+      const { data, error } = await supabase.from('tracker_digestivo').select('*').order('created_at', { ascending: false });
+      if (error) { console.error(error); return; }
+      rawRecords = data || [];
+      if (tab === 'home') renderDashboard(rawRecords);
+      if (tab === 'history') renderHistory(rawRecords);
+    }
+
+    async function saveNewRecord() {
+      document.getElementById('status-track').innerText = "Guardando en Supabase...";
+      const s = parseInt(localStorage.getItem('poop_startTime')); const e = parseInt(localStorage.getItem('poop_endTime'));
+      const cat = document.getElementById('category').value; let type = document.getElementById('type').value;
+      if(cat === 'Solo gases' || cat === 'Intento fallido / Falsa alarma') type = "No aplica";
+      
+      const st = new Date(s); const et = new Date(e);
+      const diff = et - st; const m = Math.floor(diff / 60000); const sec = Math.floor((diff % 60000) / 1000);
+      
+      const newData = {
+        day: st.toLocaleDateString('es-ES'), start_time: st.toLocaleTimeString('es-ES', {hour:'2-digit', minute:'2-digit'}),
+        end_time: et.toLocaleTimeString('es-ES', {hour:'2-digit', minute:'2-digit'}), duration: m + "m " + sec + "s",
+        category: cat, type: type, pain: document.getElementById('pain').value, urgency: document.getElementById('urgency').value, blood: document.getElementById('blood').value
+      };
+      
+      const { error } = await supabase.from('tracker_digestivo').insert([newData]);
+      if (!error) {
+        localStorage.clear(); document.getElementById('status-track').innerText = ""; 
+        hideAllTrackScreens(); document.getElementById('track-start').classList.remove('hidden'); 
+        document.getElementById('dashboard-section').classList.remove('hidden');
+        fetchDataAndRender('home');
+      } else {
+        document.getElementById('status-track').innerText = "Error al guardar.";
+      }
+    }
+
+    // --- LÓGICA DEL DASHBOARD (AHORA EN EL NAVEGADOR) ---
+    function renderDashboard(data) {
+      var stats = { global: { total: 0, avgTime: "0m 0s", dailyAvgTime: "0m 0s", dailyVisits: 0, painPct: 0, gasCount: 0, urgencyPct: 0, bloodAlerts: 0 }, mensual: { avgTime: "0m 0s", painPct: 0, gasCount: 0, urgencyPct: 0 }, today: { totalTime: "0m 0s", visits: 0 }, topTypes: [] };
+      if (data.length > 0) {
+        var now = new Date(); var unMesAtras = new Date(now.getTime() - 30*24*60*60*1000);
+        var todayD = now.getDate(); var todayM = now.getMonth() + 1; var todayY = now.getFullYear();
+        var gSecs=0, mSecs=0, todaySecs=0, todayCount=0, gPain=0, mPain=0, gGas=0, mGas=0, gUrgent=0, mUrgent=0, gBlood=0, mBlood=0, mCount=0;
+        var typeCounts = {}; var uniqueDays = {};
+        
+        data.forEach(row => {
+          uniqueDays[row.day] = true;
+          var parts = row.day.split('/'); var recordDate = new Date(parts[2], parts[1] - 1, parts[0]);
+          var isToday = (parseInt(parts[0]) === todayD && parseInt(parts[1]) === todayM && parseInt(parts[2]) === todayY);
+          var secs = 0; var match = row.duration.match(/(\d+)m\s*(\d+)s/); if (match) secs = (parseInt(match[1])*60) + parseInt(match[2]);
+          var isGas = (row.category === "Solo gases"); var hasPain = (row.pain === "Sí" || row.pain === "Si");
+          var isUrgent = (row.urgency === "Sí" || row.urgency === "Si"); var hasBlood = (row.blood === "Sí" || row.blood === "Si");
+          
+          gSecs += secs; if(isToday) { todaySecs += secs; todayCount++; }
+          if (hasPain) gPain++; if (isGas) gGas++; if (isUrgent) gUrgent++; if (hasBlood) gBlood++;
+          if (row.type && row.type !== "No aplica" && !isGas) typeCounts[row.type] = (typeCounts[row.type] || 0) + 1;
+          
+          if (recordDate >= unMesAtras) { mCount++; mSecs += secs; if (hasPain) mPain++; if (isGas) mGas++; if (isUrgent) mUrgent++; }
+        });
+        
+        var tDays = Object.keys(uniqueDays).length || 1;
+        var formatTime = (s, c) => c===0 ? "0m 0s" : Math.floor((s/c)/60)+"m "+Math.round((s/c)%60)+"s";
+        
+        stats.global = { avgTime: formatTime(gSecs, data.length), painPct: Math.round((gPain/data.length)*100)||0, gasCount: gGas, urgencyPct: Math.round((gUrgent/data.length)*100)||0, bloodAlerts: gBlood, dailyVisits: (data.length / tDays).toFixed(1), dailyAvgTime: Math.floor((gSecs/tDays)/60)+"m "+Math.round((gSecs/tDays)%60)+"s" };
+        stats.mensual = { avgTime: formatTime(mSecs, mCount), painPct: mCount>0 ? Math.round((mPain/mCount)*100):0, gasCount: mGas, urgencyPct: mCount>0 ? Math.round((mUrgent/mCount)*100):0 };
+        stats.today = { totalTime: Math.floor(todaySecs/60)+"m "+(todaySecs%60)+"s", visits: todayCount };
+        var sorted = []; for (var t in typeCounts) sorted.push({ name: t, count: typeCounts[t] });
+        stats.topTypes = sorted.sort((a,b) => b.count - a.count).slice(0, 3);
+      }
+      
+      document.getElementById('dash-tToday').innerText = stats.today.totalTime; document.getElementById('dash-vToday').innerText = stats.today.visits;
+      document.getElementById('dash-gDailyVisits').innerText = stats.global.dailyVisits; document.getElementById('dash-gDailyAvg').innerText = stats.global.dailyAvgTime;
+      document.getElementById('dash-mTime').innerText = stats.mensual.avgTime; document.getElementById('dash-gTime').innerText = stats.global.avgTime;
+      document.getElementById('dash-mGas').innerText = stats.mensual.gasCount; document.getElementById('dash-mPain').innerText = stats.mensual.painPct + "%";
+      document.getElementById('dash-mUrgent').innerText = stats.mensual.urgencyPct + "%";
+      document.getElementById('blood-banner').classList[stats.global.bloodAlerts > 0 ? 'remove' : 'add']('hidden');
+      
+      document.getElementById('dash-topTypes').innerHTML = stats.topTypes.length === 0 ? "Sin datos." : stats.topTypes.map((t,i) => `<b>${i+1}.</b> ${t.name.split(':')[0]} (${t.count})`).join(' &nbsp;|&nbsp; ');
+    }
+
+    // --- HISTORIAL ---
+    function renderHistory(records) {
+      var html = records.length === 0 ? "<p>No hay registros.</p>" : records.map(r => {
+        let badges = `${r.pain==='Sí'?'<span class="badge pain">Dolor</span> ':''}${r.urgency==='Sí'?'<span class="badge" style="background:#2563eb">Urgente</span> ':''}${r.blood==='Sí'?'<span class="badge blood">SANGRE</span> ':''}${r.category==='Solo gases'?'<span class="badge gas">Gases</span>':''}`;
+        return `<div class="history-item">
+          <strong>${r.day}</strong> (${r.start_time} - ${r.end_time}) | ⌛ ${r.duration}<br>
+          <strong>${r.category}</strong> ${r.category==='Deposición completa' ? ' - '+r.type : ''}<br>
+          <div style="margin-top:4px;">${badges}</div>
+          <button class="edit" onclick="openEditor('${r.id}')">Modificar</button>
+          <button class="danger" onclick="deleteRecord('${r.id}')">Quitar</button>
+        </div>`;
+      }).join('');
+      document.getElementById('history-list').innerHTML = html;
+    }
+
+    function calculateEditDuration() {
+      const start = document.getElementById('edit-start').value; const end = document.getElementById('edit-end').value;
+      if(start && end) {
+        const parseTime = (ts) => { let p = ts.split(':'); return (parseInt(p[0]||0)*3600) + (parseInt(p[1]||0)*60) + parseInt(p[2]||0); };
+        let diffSecs = parseTime(end) - parseTime(start); if (diffSecs < 0) diffSecs += 24 * 3600;
+        document.getElementById('edit-duration').value = Math.floor(diffSecs / 60) + "m " + (diffSecs % 60) + "s";
+      }
+    }
+    function calculateEndTimeFromDuration() {
+      const startStr = document.getElementById('edit-start').value; const durStr = document.getElementById('edit-duration').value; if (!startStr) return;
+      let mins = 0, secs = 0; let mMS = durStr.match(/(\d+)\s*m\s*(\d+)\s*s/); let mJM = durStr.match(/(\d+)\s*m/); let mD = durStr.match(/^(\d+)$/);
+      if (mMS) { mins = parseInt(mMS[1]); secs = parseInt(mMS[2]); } else if (mJM) mins = parseInt(mJM[1]); else if (mD) mins = parseInt(mD[1]);
+      else { let p = durStr.trim().split(/\s+/); if(p.length>=1) mins=parseInt(p[0])||0; if(p.length>=2) secs=parseInt(p[1])||0; }
+      let startParts = startStr.split(':'); let totalStartSecs = (parseInt(startParts[0]||0)*3600) + (parseInt(startParts[1]||0)*60) + parseInt(startParts[2]||0);
+      let endSecs = (totalStartSecs + (mins*60) + secs) % (24*3600);
+      let eH = Math.floor(endSecs/3600); let rS = endSecs%3600; let eM = Math.floor(rS/60); let eS = rS%60;
+      const pad = (n) => String(n).padStart(2, '0'); document.getElementById('edit-end').value = `${pad(eH)}:${pad(eM)}:${pad(eS)}`;
+    }
+
+    function openEditor(id) {
+      const r = rawRecords.find(i => i.id === id); if(!r) return;
+      document.getElementById('edit-id').value = r.id; document.getElementById('edit-day').value = r.day;
+      document.getElementById('edit-start').value = r.start_time; document.getElementById('edit-end').value = r.end_time;
+      document.getElementById('edit-duration').value = r.duration; document.getElementById('edit-category').value = r.category;
+      toggleBristol('edit-category', 'edit-bristol-group');
+      document.getElementById('edit-type').value = r.type; document.getElementById('edit-pain').value = r.pain;
+      document.getElementById('edit-urgency').value = r.urgency; document.getElementById('edit-blood').value = r.blood;
+      document.getElementById('editor-box').classList.remove('hidden');
+    }
+    
+    function openNewRecordForm() {
+      document.getElementById('edit-id').value = "NEW"; document.getElementById('edit-day').value = new Date().toLocaleDateString('es-ES');
+      document.getElementById('edit-start').value = "09:00:00"; document.getElementById('edit-end').value = "09:05:00"; document.getElementById('edit-duration').value = "5m 0s";
+      document.getElementById('edit-category').value = "Deposición completa"; toggleBristol('edit-category', 'edit-bristol-group');
+      document.getElementById('edit-type').value = "Tipo 4: Salchicha lisa y suave (Ideal)"; document.getElementById('edit-pain').value = "No";
+      document.getElementById('edit-urgency').value = "No"; document.getElementById('edit-blood').value = "No";
+      document.getElementById('editor-box').classList.remove('hidden');
+    }
+    function closeEditor() { document.getElementById('editor-box').classList.add('hidden'); }
+    
+    async function saveRecordEdit() {
+      const id = document.getElementById('edit-id').value; const cat = document.getElementById('edit-category').value;
+      let type = document.getElementById('edit-type').value; if(cat === 'Solo gases' || cat === 'Intento fallido / Falsa alarma') type = "No aplica";
+      const data = {
+        day: document.getElementById('edit-day').value, start_time: document.getElementById('edit-start').value, end_time: document.getElementById('edit-end').value, duration: document.getElementById('edit-duration').value,
+        category: cat, type: type, pain: document.getElementById('edit-pain').value, urgency: document.getElementById('edit-urgency').value, blood: document.getElementById('edit-blood').value
+      };
+      
+      if(id === "NEW") { await supabase.from('tracker_digestivo').insert([data]); }
+      else { await supabase.from('tracker_digestivo').update(data).eq('id', id); }
+      
+      closeEditor(); fetchDataAndRender('history');
+    }
+    
+    async function deleteRecord(id) { 
+      if(confirm("¿Borrar este registro?")) { await supabase.from('tracker_digestivo').delete().eq('id', id); fetchDataAndRender('history'); } 
+    }
+  </script>
+</body>
+</html>
