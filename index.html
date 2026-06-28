@@ -151,7 +151,7 @@
     // --- CONFIGURACIÓN SUPABASE ---
     const SUPABASE_URL = 'https://vwznzwwrpnylpzlkpziy.supabase.co/rest/v1/'; 
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3em56d3dycG55bHB6bGtweml5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2MTczNjksImV4cCI6MjA5ODE5MzM2OX0.iLivOSTwmB8KNPDSZYdhBbNE-7nGTQna4BQ34CLH-9o';
-    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+    const myDb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
     var timerInterval; 
     var rawRecords = [];
@@ -207,7 +207,7 @@
 
     // --- CONEXIÓN A SUPABASE ---
     async function fetchDataAndRender(tab) {
-      const { data, error } = await supabase.from('tracker_digestivo').select('*').order('created_at', { ascending: false });
+      const { data, error } = await myDb.from('tracker_digestivo').select('*').order('created_at', { ascending: false });
       if (error) { console.error(error); return; }
       rawRecords = data || [];
       if (tab === 'home') renderDashboard(rawRecords);
@@ -229,7 +229,7 @@
         category: cat, type: type, pain: document.getElementById('pain').value, urgency: document.getElementById('urgency').value, blood: document.getElementById('blood').value
       };
       
-      const { error } = await supabase.from('tracker_digestivo').insert([newData]);
+      const { error } = await myDb.from('tracker_digestivo').insert([newData]);
       if (!error) {
         localStorage.clear(); document.getElementById('status-track').innerText = ""; 
         hideAllTrackScreens(); document.getElementById('track-start').classList.remove('hidden'); 
@@ -347,14 +347,14 @@
         category: cat, type: type, pain: document.getElementById('edit-pain').value, urgency: document.getElementById('edit-urgency').value, blood: document.getElementById('edit-blood').value
       };
       
-      if(id === "NEW") { await supabase.from('tracker_digestivo').insert([data]); }
-      else { await supabase.from('tracker_digestivo').update(data).eq('id', id); }
+      if(id === "NEW") { await myDb.from('tracker_digestivo').insert([data]); }
+      else { await myDb.from('tracker_digestivo').update(data).eq('id', id); }
       
       closeEditor(); fetchDataAndRender('history');
     }
     
     async function deleteRecord(id) { 
-      if(confirm("¿Borrar este registro?")) { await supabase.from('tracker_digestivo').delete().eq('id', id); fetchDataAndRender('history'); } 
+      if(confirm("¿Borrar este registro?")) { await myDb.from('tracker_digestivo').delete().eq('id', id); fetchDataAndRender('history'); } 
     }
   </script>
 </body>
