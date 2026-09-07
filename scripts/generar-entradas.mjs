@@ -19,10 +19,12 @@
  *   --sangre             permitir sangre según la tasa histórica (por defecto: nunca)
  *   --sql=archivo.sql    volcar los INSERT a un archivo en vez de/además de insertar
  *   --limite=N           mostrar solo las N primeras filas en la tabla de previsualización
+ *   --json=archivo.json  analizar un volcado local en vez de leer por red (incompatible
+ *                        con --insert: en ese caso usa --sql y ejecuta el SQL aparte)
  */
 
 import { execFileSync } from 'node:child_process';
-import { writeFileSync, mkdtempSync } from 'node:fs';
+import { writeFileSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -54,6 +56,7 @@ const FILL_GAPS = flag('huecos');
 const ALLOW_BLOOD = flag('sangre');
 const SQL_OUT = opt('sql', null);
 const LIMIT = parseInt(opt('limite', '0'), 10);
+const JSON_IN = opt('json', null);
 
 // ---------- utilidades ----------
 function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
@@ -68,11 +71,26 @@ const keyToDate = k => { const p = k.split('-'); return new Date(+p[0], +p[1] - 
 const dateToKey = dt => `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
 const fmtDay = (dt, p) => p ? `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()}` : `${dt.getDate()}/${dt.getMonth() + 1}/${dt.getFullYear()}`;
 const toMin = t => { if (!t) return null; const p = String(t).split(':'); const h = +p[0], m = +p[1]; return (isNaN(h) || isNaN(m)) ? null : h * 60 + m; };
+const toSec = t => { if (!t) return null; const p = String(t).split(':'); const h = +p[0], m = +p[1]; return (isNaN(h) || isNaN(m)) ? null : h * 3600 + m * 60 + (+(p[2] || 0)); };
 const fmtTime = (s, ws) => { s = ((s % 86400) + 86400) % 86400; const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; return ws ? `${pad(h)}:${pad(m)}:${pad(x)}` : `${pad(h)}:${pad(m)}`; };
 const durSecs = d => { const m = String(d || '').match(/(\d+)\s*m\s*(\d+)\s*s/); if (m) return +m[1] * 60 + +m[2]; const m2 = String(d || '').match(/(\d+)\s*m/); return m2 ? +m2[1] * 60 : 0; };
 const fmtDur = s => `${Math.floor(s / 60)}m ${s % 60}s`;
 const fmtMS = s => `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
 const esKey = k => k.split('-').reverse().join('/');
+
+// Duración real de un registro. El campo `duration` a veces está corrupto (la app
+// ha llegado a guardar cosas como "1529m 5s" para un tramo de 90 min), así que
+// cuando no cuadra con inicio/fin manda el tramo horario.
+function realSecs(r) {
+  const ds = durSecs(r.duration);
+  const st = toSec(r.start_time), et = toSec(r.end_time);
+  if (st != null && et != null) {
+    let span = et - st;
+    if (span < 0) span += 86400;
+    if (span > 0 && (ds <= 0 || Math.abs(ds - span) > 120)) return span;
+  }
+  return ds;
+}
 
 // ---------- acceso a Supabase (vía curl: respeta el proxy y el CA del entorno) ----------
 function curl(args) {
@@ -130,7 +148,7 @@ function analyze(rows) {
     const list = byDay[k].slice().sort((a, b) => (toMin(a.start_time) ?? 0) - (toMin(b.start_time) ?? 0));
     perDay.push(list.length);
     list.forEach((r, i) => {
-      const st = toMin(r.start_time), ds = durSecs(r.duration);
+      const st = toMin(r.start_time), ds = realSecs(r);
       if (i === 0) { if (st != null) firstStarts.push(st); }
       else { if (st != null) laterStarts.push(st); if (ds > 0) laterDurs.push(ds); }
     });
@@ -138,7 +156,7 @@ function analyze(rows) {
   const yes = v => v === 'Sí' || v === 'Si';
   const rate = (arr, f) => arr.length ? arr.filter(f).length / arr.length : 0;
   const t6rows = rows.filter(r => String(r.type || '').startsWith('Tipo 6'));
-  const allDurs = rows.map(r => durSecs(r.duration)).filter(s => s > 0);
+  const allDurs = rows.map(r => realSecs(r)).filter(s => s > 0);
   const sum = allDurs.reduce((a, b) => a + b, 0);
   const typeCount = {};
   for (const r of rows) { const k = r.category === CAT_GAS ? 'Solo gases' : String(r.type || '?').split(':')[0]; typeCount[k] = (typeCount[k] || 0) + 1; }
@@ -173,7 +191,11 @@ function generate(a, untilKey) {
   if (!targetKeys.length) return { rows: [], targetKeys };
 
   const D = targetKeys.length;
-  const meanTarget = Math.min(P_MAX, Math.max(P_MIN, a.meanPerDay));
+  let meanTarget = Math.min(P_MAX, Math.max(P_MIN, a.meanPerDay));
+  // Si el histórico va por debajo del mínimo pedido, un reparto plano dejaría
+  // todos los días con exactamente P_MIN entradas, que canta a generado.
+  // Nos quedamos cerca del mínimo pero con algo de variedad.
+  if (a.meanPerDay < P_MIN && P_MAX > P_MIN) meanTarget = P_MIN + 0.25;
   const counts = new Array(D).fill(P_MIN);
   let extra = Math.max(0, Math.min(Math.round(meanTarget * D) - P_MIN * D, (P_MAX - P_MIN) * D));
   const idxPool = shuffle(counts.map((_, i) => i));
@@ -284,8 +306,11 @@ function toSQL(rows) {
 const hoy = new Date();
 const UNTIL = opt('hasta', dateToKey(hoy));
 
-console.log('Leyendo Supabase…');
-const raw = fetchAll();
+if (JSON_IN && DO_INSERT) { console.error('--json y --insert son incompatibles: con un volcado local no hay conexión. Usa --sql y ejecuta el SQL aparte.'); process.exit(1); }
+
+let raw;
+if (JSON_IN) { console.log(`Leyendo volcado local ${JSON_IN}…`); raw = JSON.parse(readFileSync(JSON_IN, 'utf8')); }
+else { console.log('Leyendo Supabase…'); raw = fetchAll(); }
 if (!raw.length) { console.error('La tabla está vacía: no hay patrón que imitar.'); process.exit(1); }
 const a = analyze(raw);
 
