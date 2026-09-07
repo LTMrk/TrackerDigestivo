@@ -39,6 +39,21 @@
 </head>
 <body>
 
+  <div id="auth-gate" class="card hidden" style="max-width:400px;">
+    <h2>Tracker Digestivo 🩺</h2>
+    <p style="font-size:13px; color:#6b7280; margin-top:0;">Tus registros son privados. Entra con tu cuenta para verlos.</p>
+    <div style="text-align:left;">
+      <label style="font-size:13px;">Correo:</label>
+      <input type="email" id="auth-email" autocomplete="username" placeholder="tu@correo.com">
+      <label style="font-size:13px;">Contraseña:</label>
+      <input type="password" id="auth-pass" autocomplete="current-password" placeholder="••••••••">
+    </div>
+    <button onclick="signIn()">Entrar</button>
+    <button class="secondary" onclick="signUp()">Crear cuenta</button>
+    <p id="auth-msg" style="font-size:13px; margin-bottom:0;"></p>
+  </div>
+
+  <div id="app-shell" class="hidden" style="width:100%; max-width:400px;">
   <div id="tab-home" class="tab-content" style="width:100%; max-width:400px;">
     <div id="track-start" class="card">
       <h2>Tracker Digestivo 🩺</h2>
@@ -142,9 +157,11 @@
     <div id="history-list">Cargando...</div>
   </div>
 
-  <div class="nav-bar">
+  <div class="nav-bar" style="display:none;">
     <button class="nav-item active" id="btn-nav-home" onclick="switchTab('home')"><span class="nav-icon">🏠</span>Inicio</button>
     <button class="nav-item" id="btn-nav-history" onclick="switchTab('history')"><span class="nav-icon">📅</span>Historial</button>
+    <button class="nav-item" id="btn-nav-out" onclick="signOut()"><span class="nav-icon">🚪</span>Salir</button>
+  </div>
   </div>
 
   <script>
@@ -153,18 +170,65 @@
     const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3em56d3dycG55bHB6bGtweml5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2MTczNjksImV4cCI6MjA5ODE5MzM2OX0.iLivOSTwmB8KNPDSZYdhBbNE-7nGTQna4BQ34CLH-9o';
     const myDb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-    var timerInterval; 
+    var timerInterval;
     var rawRecords = [];
+    var currentUser = null;
 
-    window.onload = function() {
+    // --- SESIÓN ---
+    window.onload = async function() {
+      const { data } = await myDb.auth.getSession();
+      applySession(data.session);
+      myDb.auth.onAuthStateChange(function(_evt, session) { applySession(session); });
+    };
+
+    function applySession(session) {
+      currentUser = session ? session.user : null;
+      document.getElementById('auth-gate').classList[currentUser ? 'add' : 'remove']('hidden');
+      document.getElementById('app-shell').classList[currentUser ? 'remove' : 'add']('hidden');
+      document.querySelector('.nav-bar').style.display = currentUser ? 'flex' : 'none';
+      if (currentUser) startApp();
+    }
+
+    function startApp() {
       if (localStorage.getItem('poop_startTime') && !localStorage.getItem('poop_endTime')) {
         switchTab('home'); hideAllTrackScreens(); document.getElementById('track-process').classList.remove('hidden'); startLiveTimer();
       } else if (localStorage.getItem('poop_startTime') && localStorage.getItem('poop_endTime')) {
         switchTab('home'); hideAllTrackScreens(); document.getElementById('track-form').classList.remove('hidden');
-      } else { 
-        switchTab('home'); 
+      } else {
+        switchTab('home');
       }
-    };
+    }
+
+    function authMsg(t, err) {
+      const el = document.getElementById('auth-msg');
+      el.innerText = t; el.style.color = err ? '#dc2626' : '#059669';
+    }
+
+    async function signIn() {
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-pass').value;
+      if (!email || !password) { authMsg('Escribe correo y contraseña.', true); return; }
+      authMsg('Entrando…');
+      const { error } = await myDb.auth.signInWithPassword({ email: email, password: password });
+      if (error) authMsg('No se pudo entrar: ' + error.message, true); else authMsg('');
+    }
+
+    async function signUp() {
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-pass').value;
+      if (!email || password.length < 6) { authMsg('Correo válido y contraseña de 6 caracteres o más.', true); return; }
+      authMsg('Creando cuenta…');
+      const { data, error } = await myDb.auth.signUp({ email: email, password: password });
+      if (error) { authMsg('No se pudo crear: ' + error.message, true); return; }
+      authMsg(data.session ? '' : 'Cuenta creada. Revisa tu correo para confirmarla y luego pulsa Entrar.');
+    }
+
+    async function signOut() {
+      if (!confirm('¿Cerrar sesión?')) return;
+      await myDb.auth.signOut();
+      rawRecords = [];
+      document.getElementById('auth-pass').value = '';
+    }
 
     function switchTab(t) {
       document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
@@ -226,7 +290,8 @@
       const newData = {
         day: st.toLocaleDateString('es-ES'), start_time: st.toLocaleTimeString('es-ES', {hour:'2-digit', minute:'2-digit'}),
         end_time: et.toLocaleTimeString('es-ES', {hour:'2-digit', minute:'2-digit'}), duration: m + "m " + sec + "s",
-        category: cat, type: type, pain: document.getElementById('pain').value, urgency: document.getElementById('urgency').value, blood: document.getElementById('blood').value
+        category: cat, type: type, pain: document.getElementById('pain').value, urgency: document.getElementById('urgency').value, blood: document.getElementById('blood').value,
+        user_id: currentUser.id
       };
       
       const { error } = await myDb.from('tracker_digestivo').insert([newData]);
@@ -347,7 +412,7 @@
         category: cat, type: type, pain: document.getElementById('edit-pain').value, urgency: document.getElementById('edit-urgency').value, blood: document.getElementById('edit-blood').value
       };
       
-      if(id === "NEW") { await myDb.from('tracker_digestivo').insert([data]); }
+      if(id === "NEW") { await myDb.from('tracker_digestivo').insert([Object.assign({ user_id: currentUser.id }, data)]); }
       else { await myDb.from('tracker_digestivo').update(data).eq('id', id); }
       
       closeEditor(); fetchDataAndRender('history');

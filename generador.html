@@ -39,6 +39,14 @@
   <div class="card">
     <h1>Generador de Entradas 🧪</h1>
     <p class="sub">Rellena los días que faltan en <code>tracker_digestivo</code> imitando los patrones de las entradas que ya existen. Lee la base de datos, te enseña una propuesta y <b>solo inserta si confirmas</b>.</p>
+    <div id="auth-box" style="background:#f9fafb; border:1px solid #e5e7eb; border-radius:8px; padding:12px; margin-bottom:12px;">
+      <div class="row">
+        <div class="col"><label>Correo</label><input type="text" id="auth-email" autocomplete="username"></div>
+        <div class="col"><label>Contraseña</label><input type="password" id="auth-pass" autocomplete="current-password"></div>
+      </div>
+      <button class="secondary" onclick="signIn()">Entrar</button>
+      <div id="auth-msg"></div>
+    </div>
     <button id="btn-load" onclick="loadData()">1 · Leer base de datos</button>
     <div id="load-msg"></div>
   </div>
@@ -95,7 +103,26 @@ const T6 = "Tipo 6: Acuosa / Puré";
 const T4 = "Tipo 4: Salchicha lisa y suave (Ideal)";
 const CAT_FULL = "Deposición completa", CAT_GAS = "Solo gases";
 
-let rawRows = [], analysis = null, proposal = null;
+let rawRows = [], analysis = null, proposal = null, currentUser = null;
+
+// --- SESIÓN (la tabla tiene RLS: sin entrar no se ve ni se escribe nada) ---
+window.addEventListener('load', async () => {
+  const { data } = await myDb.auth.getSession();
+  setUser(data.session ? data.session.user : null);
+});
+function setUser(u) {
+  currentUser = u;
+  document.getElementById('auth-box').style.display = u ? 'none' : '';
+  if (u) msg('auth-msg', '', 'ok');
+}
+async function signIn() {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-pass').value;
+  msg('auth-msg', 'Entrando…', 'info');
+  const { data, error } = await myDb.auth.signInWithPassword({ email, password });
+  if (error) { msg('auth-msg', 'No se pudo entrar: ' + error.message, 'err'); return; }
+  setUser(data.user);
+}
 
 // --- utilidades ---
 function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
@@ -126,6 +153,7 @@ function parseRange(str, defA, defB){ const m=String(str).match(/(\d+)\s*[-–]\
 
 // --- 1. LEER ---
 async function loadData(){
+  if(!currentUser){ msg('load-msg','Entra con tu cuenta antes de leer la base de datos.','err'); return; }
   const btn=document.getElementById('btn-load'); btn.disabled=true; msg('load-msg','Consultando Supabase…','info');
   const { data, error } = await myDb.from('tracker_digestivo').select('*');
   btn.disabled=false;
@@ -370,7 +398,7 @@ function renderPreview(D){
 }
 
 // --- 4. INSERTAR ---
-function cleanRows(){ return proposal.map(({_key,_secs,...r})=>r); }
+function cleanRows(){ return proposal.map(({_key,_secs,...r})=>({...r, user_id: currentUser ? currentUser.id : null})); }
 
 async function doInsert(){
   if(!proposal || !proposal.length) return;
