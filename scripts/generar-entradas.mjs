@@ -10,12 +10,17 @@
  *
  * Opciones:
  *   --hasta=YYYY-MM-DD   fecha final incluida (por defecto: hoy)
+ *   --desde=YYYY-MM-DD   fecha inicial (por defecto: el día de la última entrada)
  *   --seed=N             semilla aleatoria (por defecto: 20260907)
- *   --por-dia=3-5        entradas por día (mín-máx)
+ *   --por-dia=4-6        entradas por día (mín-máx)
+ *   --minutos-dia=90-120 minutos totales de baño al día (mín-máx). Sin esta opción
+ *                        las duraciones se muestrean del histórico sin presupuesto.
  *   --mezcla=80/15/4/1   % tipo 5 / tipo 6 / tipo 4 / solo gases
  *   --franja=06:45-07:10 franja de la primera entrada del día
  *   --dur1=27-33         duración en minutos de la primera entrada
- *   --huecos             rellenar también los huecos anteriores a la última entrada
+ *   --completar          añadir entradas también a los días que ya tienen registros,
+ *                        hasta llegar al número y a los minutos diarios pedidos.
+ *                        Nunca borra ni modifica lo que ya está guardado.
  *   --sangre             permitir sangre según la tasa histórica (por defecto: nunca)
  *   --sql=archivo.sql    volcar los INSERT a un archivo en vez de/además de insertar
  *   --limite=N           mostrar solo las N primeras filas en la tabla de previsualización
@@ -37,6 +42,13 @@ const T6 = 'Tipo 6: Acuosa / Puré';
 const T4 = 'Tipo 4: Salchicha lisa y suave (Ideal)';
 const CAT_FULL = 'Deposición completa', CAT_GAS = 'Solo gases';
 
+const MIN_DUR = 60;          // duración mínima de una entrada generada (1 min)
+const MAX_DUR = 45 * 60;     // duración máxima (45 min)
+const MIN_GAP = 10 * 60;     // separación mínima entre entradas
+const DAY_FROM = 6 * 3600;   // no se coloca nada antes de las 06:00
+const DAY_TO = 23 * 3600 + 55 * 60;
+const MORNING_CUT = 9 * 3600; // si el día ya tiene algo antes de esta hora, ya tiene "mañana"
+
 // ---------- argumentos ----------
 const argv = process.argv.slice(2);
 const flag = n => argv.includes('--' + n);
@@ -45,14 +57,16 @@ const parseRange = (s, a, b) => { const m = String(s).match(/(\d+)\s*[-–]\s*(\
 
 const DO_INSERT = flag('insert');
 const SEED = parseInt(opt('seed', '20260907'), 10);
-const [P_MIN, P_MAX] = parseRange(opt('por-dia', '3-5'), 3, 5);
+const [P_MIN, P_MAX] = parseRange(opt('por-dia', '4-6'), 4, 6);
 const [FD0, FD1] = parseRange(opt('dur1', '27-33'), 27, 33);
+const MINUTOS = opt('minutos-dia', null);
+const [DAY_MIN, DAY_MAX] = MINUTOS ? parseRange(MINUTOS, 90, 120).map(x => x * 60) : [null, null];
 const MIX = String(opt('mezcla', '80/15/4/1')).split('/').map(Number);
 const FRANJA = (() => {
   const m = String(opt('franja', '06:45-07:10')).match(/(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})/);
   return m ? [+m[1] * 60 + +m[2], +m[3] * 60 + +m[4]] : [405, 430];
 })();
-const FILL_GAPS = flag('huecos');
+const COMPLETE = flag('completar');
 const ALLOW_BLOOD = flag('sangre');
 const SQL_OUT = opt('sql', null);
 const LIMIT = parseInt(opt('limite', '0'), 10);
@@ -146,6 +160,7 @@ function analyze(rows) {
   const perDay = [], firstStarts = [], laterStarts = [], laterDurs = [];
   for (const k of days) {
     const list = byDay[k].slice().sort((a, b) => (toMin(a.start_time) ?? 0) - (toMin(b.start_time) ?? 0));
+    byDay[k] = list;
     perDay.push(list.length);
     list.forEach((r, i) => {
       const st = toMin(r.start_time), ds = realSecs(r);
@@ -180,117 +195,242 @@ function analyze(rows) {
   };
 }
 
+// ---------- reparto de duraciones con presupuesto ----------
+// Devuelve n duraciones que suman exactamente `total`, muestreadas del histórico
+// y ajustadas a escala, respetando [MIN_DUR, MAX_DUR].
+function repartirDuraciones(total, n, pool) {
+  if (n <= 0) return total === 0 ? [] : null;
+  if (total < n * MIN_DUR || total > n * MAX_DUR) return null;
+  const acotar = x => Math.min(MAX_DUR, Math.max(MIN_DUR, x));
+  let d = Array.from({ length: n }, () => acotar(pick(pool)));
+  const escala = total / d.reduce((a, b) => a + b, 0);
+  d = d.map(x => acotar(Math.round(x * escala)));
+  // repartir el residuo que deje el escalado, sin salirse de los topes
+  for (let guard = 0; guard < 1000; guard++) {
+    let diff = total - d.reduce((a, b) => a + b, 0);
+    if (diff === 0) break;
+    const paso = Math.sign(diff);
+    let movido = false;
+    for (const i of shuffle(d.map((_, j) => j))) {
+      const margen = paso > 0 ? MAX_DUR - d[i] : d[i] - MIN_DUR;
+      if (margen <= 0) continue;
+      const inc = paso * Math.min(Math.abs(diff), margen, 60);
+      d[i] += inc; diff -= inc; movido = true;
+      if (diff === 0) break;
+    }
+    if (!movido) break;
+  }
+  return d.reduce((a, b) => a + b, 0) === total ? d : null;
+}
+
+// ---------- colocación horaria ----------
+function huecosLibres(ocupado) {
+  const bloques = ocupado.map(([a, b]) => [a - MIN_GAP, b + MIN_GAP]).sort((x, y) => x[0] - y[0]);
+  const libres = [];
+  let cursor = DAY_FROM;
+  for (const [a, b] of bloques) {
+    if (a > cursor) libres.push([cursor, Math.min(a, DAY_TO)]);
+    cursor = Math.max(cursor, b);
+  }
+  if (cursor < DAY_TO) libres.push([cursor, DAY_TO]);
+  return libres.filter(([a, b]) => b > a);
+}
+
+// Coloca una entrada de duración `dur` lo más cerca posible de `preferido`.
+function colocar(dur, ocupado, preferido) {
+  const cands = huecosLibres(ocupado).filter(([a, b]) => b - a >= dur);
+  if (!cands.length) return null;
+  const dist = ([a, b]) => preferido < a ? a - preferido : (preferido > b - dur ? preferido - (b - dur) : 0);
+  cands.sort((x, y) => dist(x) - dist(y));
+  const [a, b] = cands[0];
+  return Math.min(Math.max(preferido, a), b - dur);
+}
+
 // ---------- generación ----------
-function generate(a, untilKey) {
-  const startKey = FILL_GAPS ? a.firstKey : a.lastKey;
-  const targetKeys = [];
-  for (let d = keyToDate(startKey); dateToKey(d) <= untilKey; d.setDate(d.getDate() + 1)) {
+function generate(a, desdeKey, hastaKey) {
+  const dias = [];
+  for (let d = keyToDate(desdeKey); dateToKey(d) <= hastaKey; d.setDate(d.getDate() + 1)) {
     const k = dateToKey(d);
-    if (!a.byDay[k]) targetKeys.push(k);
+    const existentes = a.byDay[k] || [];
+    if (existentes.length && !COMPLETE) continue;
+    dias.push({ key: k, existentes });
   }
-  if (!targetKeys.length) return { rows: [], targetKeys };
+  if (!dias.length) return { rows: [], dias: [], avisos: [] };
 
-  const D = targetKeys.length;
-  let meanTarget = Math.min(P_MAX, Math.max(P_MIN, a.meanPerDay));
-  // Si el histórico va por debajo del mínimo pedido, un reparto plano dejaría
-  // todos los días con exactamente P_MIN entradas, que canta a generado.
-  // Nos quedamos cerca del mínimo pero con algo de variedad.
-  if (a.meanPerDay < P_MIN && P_MAX > P_MIN) meanTarget = P_MIN + 0.25;
-  const counts = new Array(D).fill(P_MIN);
-  let extra = Math.max(0, Math.min(Math.round(meanTarget * D) - P_MIN * D, (P_MAX - P_MIN) * D));
-  const idxPool = shuffle(counts.map((_, i) => i));
-  for (let p = 0; extra > 0 && p < D * (P_MAX - P_MIN) + D; p++) {
-    const i = idxPool[p % D];
-    if (counts[i] < P_MAX) { counts[i]++; extra--; }
+  const avisos = [];
+
+  // --- 1. cuántas entradas añadir cada día y con cuánto tiempo ---
+  for (const dia of dias) {
+    const Ce = dia.existentes.length;
+    const Te = dia.existentes.reduce((s, r) => s + realSecs(r), 0);
+    dia.Ce = Ce; dia.Te = Te;
+
+    if (DAY_MIN == null) {           // sin presupuesto: solo número de entradas
+      dia.add = Math.max(0, ri(P_MIN, P_MAX) - Ce);
+      dia.objetivo = null;
+      continue;
+    }
+    // con presupuesto: buscar un (nº de entradas, minutos totales) que encaje
+    const opciones = [];
+    for (let C = Math.max(P_MIN, Ce); C <= P_MAX; C++) {
+      const n = C - Ce;
+      const lo = Math.max(DAY_MIN, Te + n * MIN_DUR);
+      const hi = Math.min(DAY_MAX, Te + n * MAX_DUR);
+      if (lo <= hi) opciones.push({ C, n, lo, hi });
+    }
+    if (!opciones.length) {
+      avisos.push(`${esKey(dia.key)}: no se puede llegar a ${P_MIN}-${P_MAX} entradas y ${DAY_MIN / 60}-${DAY_MAX / 60} min sin borrar lo ya guardado (tiene ${Ce} entradas y ${fmtMS(Te)})`);
+      dia.add = 0; dia.objetivo = null;
+      continue;
+    }
+    const el = pick(opciones);
+    dia.add = el.n;
+    dia.objetivo = ri(el.lo, el.hi);
   }
 
-  const total = counts.reduce((x, y) => x + y, 0);
+  // --- 2. tipos, con el reparto global pedido ---
+  const slots = [];
+  dias.forEach((dia, di) => { for (let s = 0; s < dia.add; s++) slots.push({ di, s, type: null }); });
+  const N = slots.length;
   const [p5, p6, p4, pg] = MIX;
   const sum = (p5 + p6 + p4 + pg) || 100;
-  const nGas = Math.round(total * pg / sum);
-  const n4 = Math.min(Math.round(total * p4 / sum), D);
-  let n6 = Math.round(total * p6 / sum);
-  if (total - nGas - n4 - n6 < 0) n6 = Math.max(0, total - nGas - n4);
+  const nGas = Math.round(N * pg / sum);
+  let n6 = Math.round(N * p6 / sum);
+  let n4 = Math.round(N * p4 / sum);
 
-  const slots = [];
-  counts.forEach((c, di) => { for (let s = 0; s < c; s++) slots.push({ day: di, idx: s, type: null }); });
-  const dayHasT4 = new Array(D).fill(false);
-  for (const di of shuffle(counts.map((_, i) => i)).slice(0, n4)) {
-    dayHasT4[di] = true;
-    pick(slots.filter(s => s.day === di && s.type === null)).type = T4;
+  // un día no puede mezclar tipo 4 y tipo 6, ni siquiera con lo que ya tenía guardado
+  const yaT4 = dias.map(d => d.existentes.some(r => String(r.type || '').startsWith('Tipo 4')));
+  const yaT6 = dias.map(d => d.existentes.some(r => String(r.type || '').startsWith('Tipo 6')));
+  const ponT4 = dias.map((_, i) => yaT4[i]);
+  const candT4 = shuffle(dias.map((_, i) => i).filter(i => !yaT6[i] && !yaT4[i] && dias[i].add > 0));
+  n4 = Math.min(n4, candT4.length);
+  for (let i = 0; i < n4; i++) {
+    const di = candT4[i];
+    ponT4[di] = true;
+    pick(slots.filter(s => s.di === di && s.type === null)).type = T4;
   }
-  const t6cand = shuffle(slots.filter(s => s.type === null && !dayHasT4[s.day]));
-  for (let i = 0; i < Math.min(n6, t6cand.length); i++) t6cand[i].type = T6;
-  const gasCand = shuffle(slots.filter(s => s.type === null && s.idx > 0));
-  for (let i = 0; i < Math.min(nGas, gasCand.length); i++) gasCand[i].type = 'GAS';
+  const candT6 = shuffle(slots.filter(s => s.type === null && !ponT4[s.di]));
+  n6 = Math.min(n6, candT6.length);
+  for (let i = 0; i < n6; i++) candT6[i].type = T6;
+  // los gases nunca son la entrada larga de la mañana
+  const candGas = shuffle(slots.filter(s => s.type === null && s.s > 0));
+  for (let i = 0; i < Math.min(nGas, candGas.length); i++) candGas[i].type = 'GAS';
   for (const s of slots) if (s.type === null) s.type = T5;
 
+  // --- 3. horas y duraciones ---
   const rows = [];
-  targetKeys.forEach((k, di) => {
-    const dt = keyToDate(k);
-    const daySlots = slots.filter(s => s.day === di).sort((x, y) => x.idx - y.idx);
+  dias.forEach((dia, di) => {
+    if (!dia.add) return;
+    const dt = keyToDate(dia.key);
+    const misSlots = slots.filter(s => s.di === di);
+    const ocupado = dia.existentes.map(r => { const st = toSec(r.start_time); return [st, st + realSecs(r)]; });
 
-    const firstStart = ri(FRANJA[0], FRANJA[1]) * 60 + ri(0, 59);
-    const firstDur = ri(FD0 * 60, FD1 * 60);
-    const times = [{ start: firstStart, dur: firstDur }];
+    // ¿le toca entrada de mañana? Solo si ese día no tiene ya algo temprano.
+    const tieneMañana = dia.existentes.some(r => toSec(r.start_time) < MORNING_CUT);
+    let restante = dia.objetivo != null ? dia.objetivo - dia.Te : null;
+    let n = dia.add;
+    const colocadas = [];
 
-    const sampled = [];
-    for (let i = 1; i < daySlots.length; i++) sampled.push(pick(a.laterStarts) * 60 + ri(-12, 12) * 60 + ri(0, 59));
-    sampled.sort((x, y) => x - y);
-    let prevEnd = firstStart + firstDur;
-    sampled.forEach((st, i) => {
-      const isGas = daySlots[i + 1].type === 'GAS';
-      let dur = isGas ? ri(60, 300) : Math.round(pick(a.laterDurs) * (0.85 + rnd() * 0.3));
-      dur = Math.max(60, Math.min(2400, dur));
-      let start = Math.max(st, prevEnd + 25 * 60);
-      if (start + dur > 23 * 3600 + 50 * 60) start = 23 * 3600 + 50 * 60 - dur;
-      if (start < prevEnd + 10 * 60) start = prevEnd + 10 * 60;
-      times.push({ start, dur });
-      prevEnd = start + dur;
+    if (!tieneMañana) {
+      const durM = ri(FD0 * 60, FD1 * 60);
+      const cabe = restante == null || (restante - durM >= (n - 1) * MIN_DUR && restante - durM <= (n - 1) * MAX_DUR);
+      const inicio = cabe ? colocar(durM, ocupado, ri(FRANJA[0], FRANJA[1]) * 60 + ri(0, 59)) : null;
+      const enFranja = inicio != null && inicio >= FRANJA[0] * 60 && inicio <= FRANJA[1] * 60 + 59;
+      if (enFranja) {
+        colocadas.push({ start: inicio, dur: durM, slot: misSlots[0] });
+        ocupado.push([inicio, inicio + durM]);
+        if (restante != null) restante -= durM;
+        n -= 1;
+      } else {
+        avisos.push(`${esKey(dia.key)}: sin entrada de mañana (no cabe en 06:45-07:10 con lo que ya hay ese día)`);
+      }
+    }
+
+    // duraciones del resto. Los gases se resuelven aparte: duran un par de
+    // minutos, no se les puede repartir presupuesto como a una deposición.
+    const pendientes = misSlots.slice(colocadas.length);
+    const durs = new Array(pendientes.length);
+    let presupuesto = restante;
+    pendientes.forEach((s, i) => {
+      if (s.type !== 'GAS') return;
+      durs[i] = ri(60, 300);
+      if (presupuesto != null) presupuesto -= durs[i];
     });
+    const otros = pendientes.map((_, i) => i).filter(i => durs[i] === undefined);
+    if (presupuesto != null) {
+      const rep = repartirDuraciones(presupuesto, otros.length, a.laterDurs);
+      if (rep) otros.forEach((i, j) => { durs[i] = rep[j]; });
+      else {
+        avisos.push(`${esKey(dia.key)}: no se pudo repartir ${fmtMS(presupuesto)} en ${otros.length} entradas`);
+        otros.forEach(i => { durs[i] = Math.min(MAX_DUR, Math.max(MIN_DUR, pick(a.laterDurs))); });
+      }
+    } else {
+      otros.forEach(i => { durs[i] = Math.min(MAX_DUR, Math.max(MIN_DUR, Math.round(pick(a.laterDurs) * (0.85 + rnd() * 0.3)))); });
+    }
 
-    times.forEach((t, i) => {
-      const s = daySlots[i];
-      const isGas = s.type === 'GAS';
-      const t6 = s.type === T6;
+    // colocar de mayor a menor, así las largas encuentran hueco
+    const pend = pendientes.map((slot, i) => ({ dur: durs[i], slot }))
+      .sort((x, y) => y.dur - x.dur);
+    for (const p of pend) {
+      const pref = pick(a.laterStarts) * 60 + ri(-20, 20) * 60 + ri(0, 59);
+      const inicio = colocar(p.dur, ocupado, Math.max(DAY_FROM, Math.min(DAY_TO - p.dur, pref)));
+      if (inicio == null) { avisos.push(`${esKey(dia.key)}: no cabe una entrada de ${fmtMS(p.dur)}`); continue; }
+      colocadas.push({ start: inicio, dur: p.dur, slot: p.slot });
+      ocupado.push([inicio, inicio + p.dur]);
+    }
+
+    for (const c of colocadas.sort((x, y) => x.start - y.start)) {
+      const esGas = c.slot.type === 'GAS';
+      const t6 = c.slot.type === T6;
       const pPain = (t6 && a.rates.painT6 != null) ? a.rates.painT6 : a.rates.pain;
       const pUrg = (t6 && a.rates.urgencyT6 != null) ? a.rates.urgencyT6 : a.rates.urgency;
       rows.push({
         day: fmtDay(dt, a.paddedDay),
-        start_time: fmtTime(t.start, a.timeWithSecs),
-        end_time: fmtTime(t.start + t.dur, a.timeWithSecs),
-        duration: fmtDur(t.dur),
-        category: isGas ? CAT_GAS : CAT_FULL,
-        type: isGas ? 'No aplica' : s.type,
-        pain: (!isGas && rnd() < pPain) ? 'Sí' : 'No',
+        start_time: fmtTime(c.start, a.timeWithSecs),
+        end_time: fmtTime(c.start + c.dur, a.timeWithSecs),
+        duration: fmtDur(c.dur),
+        category: esGas ? CAT_GAS : CAT_FULL,
+        type: esGas ? 'No aplica' : c.slot.type,
+        pain: (!esGas && rnd() < pPain) ? 'Sí' : 'No',
         urgency: (rnd() < pUrg) ? 'Sí' : 'No',
-        blood: (ALLOW_BLOOD && !isGas && rnd() < a.rates.blood) ? 'Sí' : 'No',
-        _key: k, _secs: t.dur
+        blood: (ALLOW_BLOOD && !esGas && rnd() < a.rates.blood) ? 'Sí' : 'No',
+        _key: dia.key, _secs: c.dur
       });
-    });
+    }
   });
-  return { rows, targetKeys };
+
+  return { rows, dias, avisos };
 }
 
-// ---------- comprobaciones ----------
-function verify(rows, a) {
-  const byDay = {};
-  for (const r of rows) (byDay[r._key] = byDay[r._key] || []).push(r);
-  const toS = t => { const q = t.split(':'); return +q[0] * 3600 + +q[1] * 60 + (+(q[2] || 0)); };
+// ---------- comprobaciones (sobre el resultado final: lo guardado + lo nuevo) ----------
+function verify(rows, a, dias) {
   const problems = [];
-  for (const [k, l] of Object.entries(byDay)) {
-    if (l.some(r => r.type === T4) && l.some(r => r.type === T6)) problems.push(`${esKey(k)}: mezcla tipo 4 y tipo 6`);
-    if (l.length < P_MIN || l.length > P_MAX) problems.push(`${esKey(k)}: ${l.length} entradas (fuera de ${P_MIN}-${P_MAX})`);
-    const f = toS(l[0].start_time);
-    if (f < FRANJA[0] * 60 || f > FRANJA[1] * 60 + 59) problems.push(`${esKey(k)}: 1ª entrada a las ${l[0].start_time}`);
-    const fd = Math.floor(l[0]._secs / 60);
-    if (fd < FD0 || fd > FD1) problems.push(`${esKey(k)}: 1ª entrada dura ${fd} min`);
-    if (l[0].category === CAT_GAS) problems.push(`${esKey(k)}: la 1ª entrada es solo gases`);
-    for (let i = 1; i < l.length; i++) {
-      if (toS(l[i].start_time) < toS(l[i - 1].end_time)) problems.push(`${esKey(k)}: solape a las ${l[i].start_time}`);
+  const nuevasPorDia = {};
+  for (const r of rows) (nuevasPorDia[r._key] = nuevasPorDia[r._key] || []).push(r);
+
+  for (const dia of dias) {
+    const nuevas = nuevasPorDia[dia.key] || [];
+    const todas = [
+      ...dia.existentes.map(r => ({ s: toSec(r.start_time), d: realSecs(r), t: r.type, cat: r.category, real: true })),
+      ...nuevas.map(r => ({ s: toSec(r.start_time), d: r._secs, t: r.type, cat: r.category, real: false }))
+    ].sort((x, y) => x.s - y.s);
+
+    const k = esKey(dia.key);
+    if (todas.length < P_MIN || todas.length > P_MAX) problems.push(`${k}: ${todas.length} entradas (fuera de ${P_MIN}-${P_MAX})`);
+    const total = todas.reduce((s, x) => s + x.d, 0);
+    if (DAY_MIN != null && (total < DAY_MIN || total > DAY_MAX)) problems.push(`${k}: ${fmtMS(total)} al día (fuera de ${DAY_MIN / 60}-${DAY_MAX / 60} min)`);
+    if (todas.some(x => String(x.t).startsWith('Tipo 4')) && todas.some(x => String(x.t).startsWith('Tipo 6'))) problems.push(`${k}: mezcla tipo 4 y tipo 6`);
+    for (let i = 1; i < todas.length; i++) {
+      if (todas[i].s < todas[i - 1].s + todas[i - 1].d) problems.push(`${k}: solape a las ${fmtTime(todas[i].s)}`);
     }
-    if (toS(l[l.length - 1].end_time) > 23 * 3600 + 59 * 60) problems.push(`${esKey(k)}: se pasa de medianoche`);
-    if (a.byDay[k]) problems.push(`${esKey(k)}: ¡ese día ya tenía registros!`);
+    if (todas.length && todas[todas.length - 1].s + todas[todas.length - 1].d > 86400) problems.push(`${k}: se pasa de medianoche`);
+    for (const r of nuevas) {
+      const fd = Math.floor(r._secs / 60);
+      const st = toSec(r.start_time);
+      const esPrimera = todas[0] && !todas[0].real && todas[0].s === st;
+      if (esPrimera && (st < FRANJA[0] * 60 || st > FRANJA[1] * 60 + 59)) problems.push(`${k}: 1ª entrada generada a las ${r.start_time}`);
+      if (esPrimera && (fd < FD0 || fd > FD1)) problems.push(`${k}: 1ª entrada generada dura ${fd} min`);
+    }
   }
   return problems;
 }
@@ -303,9 +443,6 @@ function toSQL(rows) {
 }
 
 // ---------- principal ----------
-const hoy = new Date();
-const UNTIL = opt('hasta', dateToKey(hoy));
-
 if (JSON_IN && DO_INSERT) { console.error('--json y --insert son incompatibles: con un volcado local no hay conexión. Usa --sql y ejecuta el SQL aparte.'); process.exit(1); }
 
 let raw;
@@ -314,6 +451,9 @@ else { console.log('Leyendo Supabase…'); raw = fetchAll(); }
 if (!raw.length) { console.error('La tabla está vacía: no hay patrón que imitar.'); process.exit(1); }
 const a = analyze(raw);
 
+const UNTIL = opt('hasta', dateToKey(new Date()));
+const FROM = opt('desde', a.lastKey);
+
 console.log(`\n=== HISTÓRICO ===`);
 console.log(`  ${a.total} registros en ${a.days.length} días (${esKey(a.firstKey)} → ${esKey(a.lastKey)})`);
 console.log(`  Media veces/día : ${a.meanPerDay.toFixed(2)}`);
@@ -321,32 +461,35 @@ console.log(`  T. medio/visita : ${fmtMS(a.meanDur)}`);
 console.log(`  T. medio/día    : ${fmtMS(a.meanDayTime)}`);
 console.log(`  Dolor ${(a.rates.pain * 100).toFixed(0)}% · Urgencia ${(a.rates.urgency * 100).toFixed(0)}% · Sangre ${(a.rates.blood * 100).toFixed(1)}%`);
 console.log(`  Reparto actual  : ` + Object.entries(a.typeCount).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${(v / a.total * 100).toFixed(0)}%`).join(' · '));
-if (a.firstStarts.length) console.log(`  1ª entrada del día, histórico: ${fmtTime(Math.min(...a.firstStarts) * 60)}–${fmtTime(Math.max(...a.firstStarts) * 60)}`);
 console.log(`  Formato: fecha ${a.paddedDay ? 'DD/MM/YYYY' : 'D/M/YYYY'}, hora ${a.timeWithSecs ? 'HH:MM:SS' : 'HH:MM'}`);
 
-const { rows, targetKeys } = generate(a, UNTIL);
-if (!rows.length) { console.log(`\nNo hay ningún día vacío entre ${esKey(a.lastKey)} y ${esKey(UNTIL)}. Nada que generar.`); process.exit(0); }
+const { rows, dias, avisos } = generate(a, FROM, UNTIL);
+if (!rows.length) { console.log(`\nNada que generar entre ${esKey(FROM)} y ${esKey(UNTIL)}.`); process.exit(0); }
 
-const D = targetKeys.length;
+const D = dias.length;
+const conNuevas = new Set(rows.map(r => r._key)).size;
 const secs = rows.reduce((x, r) => x + r._secs, 0);
 const cnt = t => rows.filter(r => t === 'GAS' ? r.category === CAT_GAS : String(r.type).startsWith(t)).length;
 const pc = n => (n / rows.length * 100).toFixed(1) + '%';
+const totalDia = dias.map(d => d.Te + rows.filter(r => r._key === d.key).reduce((s, r) => s + r._secs, 0));
+const cntDia = dias.map(d => d.Ce + rows.filter(r => r._key === d.key).length);
 
 console.log(`\n=== PROPUESTA ===`);
-console.log(`  ${rows.length} entradas nuevas en ${D} días (${esKey(targetKeys[0])} → ${esKey(targetKeys[D - 1])})`);
-console.log(`  Veces/día       : ${(rows.length / D).toFixed(2)}   (histórico ${a.meanPerDay.toFixed(2)})`);
-console.log(`  T. medio/visita : ${fmtMS(secs / rows.length)}   (histórico ${fmtMS(a.meanDur)})`);
-console.log(`  T. medio/día    : ${fmtMS(secs / D)}   (histórico ${fmtMS(a.meanDayTime)})`);
+console.log(`  ${rows.length} entradas nuevas repartidas en ${conNuevas} días (rango ${esKey(FROM)} → ${esKey(UNTIL)}, ${D} días)`);
+console.log(`  Entradas/día resultantes : ${Math.min(...cntDia)}–${Math.max(...cntDia)} (media ${(cntDia.reduce((x, y) => x + y, 0) / D).toFixed(2)})`);
+console.log(`  Minutos/día resultantes  : ${fmtMS(Math.min(...totalDia))}–${fmtMS(Math.max(...totalDia))} (media ${fmtMS(totalDia.reduce((x, y) => x + y, 0) / D)})`);
+console.log(`  T. medio/visita nueva    : ${fmtMS(secs / rows.length)}   (histórico ${fmtMS(a.meanDur)})`);
 console.log(`  Dolor ${(rows.filter(r => r.pain === 'Sí').length / rows.length * 100).toFixed(0)}% · Urgencia ${(rows.filter(r => r.urgency === 'Sí').length / rows.length * 100).toFixed(0)}% · Sangre ${rows.filter(r => r.blood === 'Sí').length} registros`);
-console.log(`  Reparto: Tipo 5 ${cnt('Tipo 5')} (${pc(cnt('Tipo 5'))}) · Tipo 6 ${cnt('Tipo 6')} (${pc(cnt('Tipo 6'))}) · Tipo 4 ${cnt('Tipo 4')} (${pc(cnt('Tipo 4'))}) · Solo gases ${cnt('GAS')} (${pc(cnt('GAS'))})`);
+console.log(`  Reparto nuevas: Tipo 5 ${cnt('Tipo 5')} (${pc(cnt('Tipo 5'))}) · Tipo 6 ${cnt('Tipo 6')} (${pc(cnt('Tipo 6'))}) · Tipo 4 ${cnt('Tipo 4')} (${pc(cnt('Tipo 4'))}) · Solo gases ${cnt('GAS')} (${pc(cnt('GAS'))})`);
 
-const problems = verify(rows, a);
+const problems = verify(rows, a, dias);
 console.log(`\n=== COMPROBACIONES ===`);
-if (problems.length) { console.log('  ⚠️ ' + problems.length + ' problema(s):'); problems.slice(0, 20).forEach(p => console.log('   - ' + p)); }
-else console.log('  ✅ Sin conflictos tipo 4 + tipo 6, sin solapes, franjas y duraciones correctas, ningún día pisado.');
+if (problems.length) { console.log(`  ⚠️ ${problems.length} problema(s):`); problems.slice(0, 30).forEach(p => console.log('   - ' + p)); }
+else console.log('  ✅ Entradas por día y minutos diarios en rango, sin tipo 4 y tipo 6 el mismo día, sin solapes, primera entrada en franja.');
+if (avisos.length) { console.log(`\n  ${avisos.length} aviso(s):`); avisos.slice(0, 30).forEach(p => console.log('   - ' + p)); }
 
 const show = LIMIT > 0 ? rows.slice(0, LIMIT) : rows;
-console.log(`\n=== ENTRADAS ${LIMIT > 0 ? `(${LIMIT} primeras de ${rows.length})` : ''} ===`);
+console.log(`\n=== ENTRADAS NUEVAS ${LIMIT > 0 ? `(${LIMIT} primeras de ${rows.length})` : ''} ===`);
 let lastDay = null;
 for (const r of show) {
   if (r.day !== lastDay) { console.log(`\n  ${r.day}`); lastDay = r.day; }
