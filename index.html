@@ -126,8 +126,8 @@
         <input type="hidden" id="edit-id">
         <label style="font-size: 13px;">Fecha (DD/MM/YYYY):</label><input type="text" id="edit-day">
         <div class="flex-row">
-          <div class="flex-col"><label>Inicio:</label><input type="time" id="edit-start" step="1" onchange="calculateEditDuration()"></div>
-          <div class="flex-col"><label>Fin:</label><input type="time" id="edit-end" step="1" onchange="calculateEditDuration()"></div>
+          <div class="flex-col"><label>Inicio:</label><input type="time" id="edit-start" onchange="calculateEditDuration()"></div>
+          <div class="flex-col"><label>Fin:</label><input type="time" id="edit-end" onchange="calculateEditDuration()"></div>
           <div class="flex-col" style="flex: 1.2;"><label>Duración:</label><input type="text" id="edit-duration" placeholder="0m 0s" oninput="calculateEndTimeFromDuration()"></div>
         </div>
         <label style="font-size: 13px;">Categoría:</label>
@@ -369,6 +369,14 @@
     // Momento real del registro, a partir de su fecha y su hora de inicio.
     // No sirve created_at: los registros añadidos en bloque se guardaron todos
     // a la vez, así que ese orden no tiene nada que ver con el del historial.
+    // Todas las horas guardadas van en HH:MM. Algunos navegadores devuelven
+    // HH:MM:SS en los <input type="time">, así que se recorta al guardar.
+    function hhmm(t) {
+      var p = String(t || '').split(':');
+      if (p.length < 2) return t;
+      return String(p[0]).padStart(2, '0') + ':' + String(p[1]).padStart(2, '0');
+    }
+
     function recordStamp(r) {
       var f = String(r.day || '').split('/');
       if (f.length !== 3) return 0;
@@ -407,7 +415,7 @@
       let startParts = startStr.split(':'); let totalStartSecs = (parseInt(startParts[0]||0)*3600) + (parseInt(startParts[1]||0)*60) + parseInt(startParts[2]||0);
       let endSecs = (totalStartSecs + (mins*60) + secs) % (24*3600);
       let eH = Math.floor(endSecs/3600); let rS = endSecs%3600; let eM = Math.floor(rS/60); let eS = rS%60;
-      const pad = (n) => String(n).padStart(2, '0'); document.getElementById('edit-end').value = `${pad(eH)}:${pad(eM)}:${pad(eS)}`;
+      const pad = (n) => String(n).padStart(2, '0'); document.getElementById('edit-end').value = `${pad(eH)}:${pad(eM)}`;
     }
 
     function openEditor(id) {
@@ -423,7 +431,7 @@
     
     function openNewRecordForm() {
       document.getElementById('edit-id').value = "NEW"; document.getElementById('edit-day').value = new Date().toLocaleDateString('es-ES');
-      document.getElementById('edit-start').value = "09:00:00"; document.getElementById('edit-end').value = "09:05:00"; document.getElementById('edit-duration').value = "5m 0s";
+      document.getElementById('edit-start').value = "09:00"; document.getElementById('edit-end').value = "09:05"; document.getElementById('edit-duration').value = "5m 0s";
       document.getElementById('edit-category').value = "Deposición completa"; toggleBristol('edit-category', 'edit-bristol-group');
       document.getElementById('edit-type').value = "Tipo 4: Salchicha lisa y suave (Ideal)"; document.getElementById('edit-pain').value = "No";
       document.getElementById('edit-urgency').value = "No"; document.getElementById('edit-blood').value = "No";
@@ -435,7 +443,7 @@
       const id = document.getElementById('edit-id').value; const cat = document.getElementById('edit-category').value;
       let type = document.getElementById('edit-type').value; if(cat === 'Solo gases' || cat === 'Intento fallido / Falsa alarma') type = "No aplica";
       const data = {
-        day: document.getElementById('edit-day').value, start_time: document.getElementById('edit-start').value, end_time: document.getElementById('edit-end').value, duration: document.getElementById('edit-duration').value,
+        day: document.getElementById('edit-day').value, start_time: hhmm(document.getElementById('edit-start').value), end_time: hhmm(document.getElementById('edit-end').value), duration: document.getElementById('edit-duration').value,
         category: cat, type: type, pain: document.getElementById('edit-pain').value, urgency: document.getElementById('edit-urgency').value, blood: document.getElementById('edit-blood').value
       };
       
