@@ -85,7 +85,8 @@ recién descargados.
 
 ## Historial
 
-En **📅 Historial** está la lista completa, de más reciente a más antiguo, con la fecha,
+En **📅 Historial** está la lista completa, ordenada por la fecha y la hora del propio
+registro, de la más próxima a ahora hacia atrás, con la fecha,
 las horas de inicio y fin, la duración, la categoría, el tipo y unas etiquetas de color
 para dolor, urgencia, sangre y gases.
 

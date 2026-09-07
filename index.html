@@ -366,7 +366,18 @@
     }
 
     // --- HISTORIAL ---
+    // Momento real del registro, a partir de su fecha y su hora de inicio.
+    // No sirve created_at: los registros añadidos en bloque se guardaron todos
+    // a la vez, así que ese orden no tiene nada que ver con el del historial.
+    function recordStamp(r) {
+      var f = String(r.day || '').split('/');
+      if (f.length !== 3) return 0;
+      var h = String(r.start_time || '0:0').split(':');
+      return new Date(+f[2], (+f[1]) - 1, +f[0], +h[0] || 0, +h[1] || 0, +h[2] || 0).getTime();
+    }
+
     function renderHistory(records) {
+      records = records.slice().sort((a, b) => recordStamp(b) - recordStamp(a));
       var html = records.length === 0 ? "<p>No hay registros.</p>" : records.map(r => {
         let badges = `${r.pain==='Sí'?'<span class="badge pain">Dolor</span> ':''}${r.urgency==='Sí'?'<span class="badge" style="background:#2563eb">Urgente</span> ':''}${r.blood==='Sí'?'<span class="badge blood">SANGRE</span> ':''}${r.category==='Solo gases'?'<span class="badge gas">Gases</span>':''}`;
         return `<div class="history-item">
