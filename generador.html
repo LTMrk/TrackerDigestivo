@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Generador de Entradas · Tracker Digestivo</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background:#f3f4f6; margin:0; padding:12px; color:#1f2937; }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  .card { background:#fff; padding:15px; border-radius:12px; box-shadow:0 2px 4px rgba(0,0,0,.1); margin-bottom:12px; }
+  h1 { font-size:20px; margin:0 0 4px; } h2 { font-size:16px; margin:0 0 10px; }
+  p.sub { margin:0 0 12px; font-size:13px; color:#6b7280; }
+  button { color:#fff; border:none; padding:11px 15px; border-radius:10px; font-size:15px; font-weight:bold; cursor:pointer; background:#3b82f6; }
+  button.save { background:#10b981; } button.secondary { background:#6b7280; } button:disabled { background:#cbd5e1; cursor:not-allowed; }
+  label { font-size:13px; display:block; margin-bottom:3px; }
+  input[type=text], input[type=number], input[type=date] { width:100%; padding:9px; border:1px solid #ccc; border-radius:8px; font-size:14px; box-sizing:border-box; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; } .col { flex:1; min-width:130px; }
+  .chk { display:flex; align-items:flex-start; gap:8px; font-size:13px; margin-bottom:8px; }
+  .chk input { margin-top:2px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:6px; margin:10px 0; }
+  .box { background:#f9fafb; border:1px solid #e5e7eb; border-top:3px solid #3b82f6; border-radius:8px; padding:8px; text-align:center; }
+  .box .lbl { font-size:9px; text-transform:uppercase; font-weight:bold; color:#6b7280; letter-spacing:-.3px; display:block; }
+  .box .val { font-size:15px; font-weight:bold; margin-top:2px; }
+  .box small { display:block; font-size:10px; color:#9ca3af; }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th, td { text-align:left; padding:5px 6px; border-bottom:1px solid #eef0f3; white-space:nowrap; }
+  th { background:#f9fafb; position:sticky; top:0; font-size:11px; text-transform:uppercase; color:#6b7280; }
+  .scroll { max-height:380px; overflow:auto; border:1px solid #e5e7eb; border-radius:8px; }
+  .msg { font-size:13px; padding:9px 11px; border-radius:8px; margin-top:10px; }
+  .msg.ok { background:#ecfdf5; color:#065f46; } .msg.err { background:#fef2f2; color:#991b1b; } .msg.info { background:#eff6ff; color:#1e40af; }
+  .t5{color:#059669}.t6{color:#b45309}.t4{color:#2563eb}.tg{color:#7c3aed}
+  code { background:#f3f4f6; padding:1px 4px; border-radius:4px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="card">
+    <h1>Generador de Entradas 🧪</h1>
+    <p class="sub">Rellena los días que faltan en <code>tracker_digestivo</code> imitando los patrones de las entradas que ya existen. Lee la base de datos, te enseña una propuesta y <b>solo inserta si confirmas</b>.</p>
+    <button id="btn-load" onclick="loadData()">1 · Leer base de datos</button>
+    <div id="load-msg"></div>
+  </div>
+
+  <div class="card" id="card-analysis" style="display:none">
+    <h2>Patrón detectado en tus datos</h2>
+    <div class="grid" id="analysis-grid"></div>
+    <div id="analysis-notes" style="font-size:12px;color:#6b7280"></div>
+  </div>
+
+  <div class="card" id="card-opts" style="display:none">
+    <h2>Opciones</h2>
+    <div class="row">
+      <div class="col"><label>Generar hasta (incluido)</label><input type="date" id="opt-until"></div>
+      <div class="col"><label>Semilla aleatoria</label><input type="number" id="opt-seed"></div>
+    </div>
+    <div class="row">
+      <div class="col"><label>Primera entrada entre</label><input type="text" id="opt-first-win" value="06:45-07:10"></div>
+      <div class="col"><label>Duración 1ª entrada (min)</label><input type="text" id="opt-first-dur" value="27-33"></div>
+    </div>
+    <div class="row">
+      <div class="col"><label>Entradas por día (mín-máx)</label><input type="text" id="opt-perday" value="3-5"></div>
+      <div class="col"><label>% Tipo 5 / 6 / 4 / Gases</label><input type="text" id="opt-mix" value="80/15/4/1"></div>
+    </div>
+    <div class="chk"><input type="checkbox" id="opt-gaps"><label for="opt-gaps" style="margin:0">Rellenar también los huecos anteriores a la última entrada (días sueltos sin registros)</label></div>
+    <div class="chk"><input type="checkbox" id="opt-blood"><label for="opt-blood" style="margin:0">Permitir registros con sangre según la tasa histórica <span id="blood-rate"></span></label></div>
+    <button class="save" id="btn-gen" onclick="generate()">2 · Generar propuesta</button>
+    <div id="gen-msg"></div>
+  </div>
+
+  <div class="card" id="card-preview" style="display:none">
+    <h2>Propuesta</h2>
+    <div class="grid" id="preview-grid"></div>
+    <div id="preview-mix" style="font-size:12px;color:#4b5563;margin-bottom:10px"></div>
+    <div class="scroll"><table id="preview-table"></table></div>
+    <div class="row" style="margin-top:12px">
+      <button class="save" id="btn-insert" onclick="doInsert()">3 · Insertar en Supabase</button>
+      <button class="secondary" onclick="downloadSQL()">Descargar SQL</button>
+      <button class="secondary" onclick="reroll()">Otra variante</button>
+    </div>
+    <div id="insert-msg"></div>
+  </div>
+
+</div>
+
+<script>
+// --- CONFIGURACIÓN SUPABASE (misma que index.html) ---
+const SUPABASE_URL = 'https://vwznzwwrpnylpzlkpziy.supabase.co/';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZ3em56d3dycG55bHB6bGtweml5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI2MTczNjksImV4cCI6MjA5ODE5MzM2OX0.iLivOSTwmB8KNPDSZYdhBbNE-7nGTQna4BQ34CLH-9o';
+const myDb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const T5 = "Tipo 5: Trozos blandos";
+const T6 = "Tipo 6: Acuosa / Puré";
+const T4 = "Tipo 4: Salchicha lisa y suave (Ideal)";
+const CAT_FULL = "Deposición completa", CAT_GAS = "Solo gases";
+
+let rawRows = [], analysis = null, proposal = null;
+
+// --- utilidades ---
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296}}
+let rnd = Math.random;
+const ri = (a,b)=>a+Math.floor(rnd()*(b-a+1));
+const pick = arr => arr[Math.floor(rnd()*arr.length)];
+const shuffle = a => { for(let i=a.length-1;i>0;i--){const j=Math.floor(rnd()*(i+1));[a[i],a[j]]=[a[j],a[i]];} return a; };
+const pad = n => String(n).padStart(2,'0');
+function msg(id, text, kind){ document.getElementById(id).innerHTML = text ? `<div class="msg ${kind||'info'}">${text}</div>` : ''; }
+
+function parseDayKey(s){ // "7/9/2026" o "07/09/2026" -> "2026-09-07"
+  if(!s) return null;
+  const p = String(s).trim().split('/');
+  if(p.length!==3) return null;
+  const d=parseInt(p[0],10), m=parseInt(p[1],10), y=parseInt(p[2],10);
+  if(!d||!m||!y) return null;
+  return `${y}-${pad(m)}-${pad(d)}`;
+}
+function keyToDate(k){ const p=k.split('-'); return new Date(+p[0], +p[1]-1, +p[2]); }
+function dateToKey(dt){ return `${dt.getFullYear()}-${pad(dt.getMonth()+1)}-${pad(dt.getDate())}`; }
+function fmtDay(dt, padded){ return padded ? `${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()}` : `${dt.getDate()}/${dt.getMonth()+1}/${dt.getFullYear()}`; }
+function toMin(t){ if(!t) return null; const p=String(t).split(':'); const h=parseInt(p[0],10), m=parseInt(p[1],10); if(isNaN(h)||isNaN(m)) return null; return h*60+m; }
+function fmtTime(totalSecs, withSecs){ totalSecs=((totalSecs%86400)+86400)%86400; const h=Math.floor(totalSecs/3600), m=Math.floor((totalSecs%3600)/60), s=totalSecs%60; return withSecs ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(h)}:${pad(m)}`; }
+function durSecs(d){ const m=String(d||'').match(/(\d+)\s*m\s*(\d+)\s*s/); if(m) return (+m[1])*60 + (+m[2]); const m2=String(d||'').match(/(\d+)\s*m/); return m2 ? (+m2[1])*60 : 0; }
+function fmtDur(s){ return `${Math.floor(s/60)}m ${s%60}s`; }
+function fmtMS(s){ return `${Math.floor(s/60)}m ${Math.round(s%60)}s`; }
+function parseRange(str, defA, defB){ const m=String(str).match(/(\d+)\s*[-–]\s*(\d+)/); return m ? [+m[1], +m[2]] : [defA, defB]; }
+
+// --- 1. LEER ---
+async function loadData(){
+  const btn=document.getElementById('btn-load'); btn.disabled=true; msg('load-msg','Consultando Supabase…','info');
+  const { data, error } = await myDb.from('tracker_digestivo').select('*');
+  btn.disabled=false;
+  if(error){ msg('load-msg','Error al leer: '+error.message,'err'); return; }
+  rawRows = data||[];
+  if(rawRows.length===0){ msg('load-msg','La tabla está vacía: no hay patrón que imitar.','err'); return; }
+  analysis = analyze(rawRows);
+  msg('load-msg', `Leídos <b>${rawRows.length}</b> registros en <b>${analysis.days.length}</b> días distintos (${analysis.firstKey} → ${analysis.lastKey}).`, 'ok');
+  renderAnalysis();
+  document.getElementById('card-analysis').style.display='';
+  document.getElementById('card-opts').style.display='';
+  const untilDefault = new Date(); document.getElementById('opt-until').value = dateToKey(untilDefault);
+  document.getElementById('opt-until').min = analysis.lastKey;
+  if(!document.getElementById('opt-seed').value) document.getElementById('opt-seed').value = Math.floor(Math.random()*100000);
+  document.getElementById('blood-rate').textContent = `(${(analysis.rates.blood*100).toFixed(1)}%)`;
+}
+
+// --- 2. ANALIZAR ---
+function analyze(rows){
+  const byDay = {};
+  let paddedDay=0, secsFmt=0, valid=0;
+  rows.forEach(r=>{
+    const k = parseDayKey(r.day); if(!k) return;
+    valid++;
+    if(/^\d{2}\/\d{2}\/\d{4}$/.test(String(r.day).trim())) paddedDay++;
+    if(/^\d{1,2}:\d{2}:\d{2}$/.test(String(r.start_time||'').trim())) secsFmt++;
+    (byDay[k] = byDay[k] || []).push(r);
+  });
+  const days = Object.keys(byDay).sort();
+  const perDay = [], firstStarts = [], firstDurs = [], laterStarts = [], laterDurs = [];
+  days.forEach(k=>{
+    const list = byDay[k].slice().sort((a,b)=>(toMin(a.start_time)??0)-(toMin(b.start_time)??0));
+    perDay.push(list.length);
+    list.forEach((r,i)=>{
+      const st = toMin(r.start_time), ds = durSecs(r.duration);
+      if(i===0){ if(st!=null) firstStarts.push(st); if(ds>0) firstDurs.push(ds); }
+      else { if(st!=null) laterStarts.push(st); if(ds>0) laterDurs.push(ds); }
+    });
+  });
+  const yes = v => v==='Sí' || v==='Si';
+  const n = rows.length;
+  const t6rows = rows.filter(r=>String(r.type||'').startsWith('Tipo 6'));
+  const rate = (arr, f) => arr.length ? arr.filter(f).length/arr.length : 0;
+  const allDurs = rows.map(r=>durSecs(r.duration)).filter(s=>s>0);
+  const typeCount = {}; rows.forEach(r=>{ const k = r.category===CAT_GAS ? 'Solo gases' : (String(r.type||'?').split(':')[0]); typeCount[k]=(typeCount[k]||0)+1; });
+
+  return {
+    byDay, days, firstKey: days[0], lastKey: days[days.length-1],
+    paddedDay: valid>0 && paddedDay/valid >= .5,
+    timeWithSecs: valid>0 && secsFmt/valid >= .5,
+    perDay, meanPerDay: perDay.reduce((a,b)=>a+b,0)/(perDay.length||1),
+    laterStarts: laterStarts.length ? laterStarts : [11*60, 13*60+30, 17*60, 20*60+30],
+    laterDurs: laterDurs.length ? laterDurs : [9*60, 12*60, 15*60],
+    firstStarts, firstDurs,
+    meanDur: allDurs.length ? allDurs.reduce((a,b)=>a+b,0)/allDurs.length : 600,
+    meanDayTime: days.length ? allDurs.reduce((a,b)=>a+b,0)/days.length : 0,
+    rates: {
+      pain: rate(rows, r=>yes(r.pain)),
+      urgency: rate(rows, r=>yes(r.urgency)),
+      blood: rate(rows, r=>yes(r.blood)),
+      painT6: t6rows.length>=5 ? rate(t6rows, r=>yes(r.pain)) : null,
+      urgencyT6: t6rows.length>=5 ? rate(t6rows, r=>yes(r.urgency)) : null
+    },
+    typeCount, total: n
+  };
+}
+
+function renderAnalysis(){
+  const a = analysis;
+  const boxes = [
+    ['Registros', a.total, ''],
+    ['Días con datos', a.days.length, ''],
+    ['Media veces/día', a.meanPerDay.toFixed(2), ''],
+    ['T. medio/visita', fmtMS(a.meanDur), ''],
+    ['T. medio/día', fmtMS(a.meanDayTime), ''],
+    ['Dolor', (a.rates.pain*100).toFixed(0)+'%', ''],
+    ['Urgencia', (a.rates.urgency*100).toFixed(0)+'%', ''],
+    ['Sangre', (a.rates.blood*100).toFixed(1)+'%', ''],
+    ['Última entrada', a.lastKey.split('-').reverse().join('/'), '']
+  ];
+  document.getElementById('analysis-grid').innerHTML = boxes.map(b=>`<div class="box"><span class="lbl">${b[0]}</span><div class="val">${b[1]}</div></div>`).join('');
+  const mix = Object.entries(a.typeCount).sort((x,y)=>y[1]-x[1]).map(([k,v])=>`${k}: ${v} (${(v/a.total*100).toFixed(0)}%)`).join(' · ');
+  const fs = a.firstStarts.length ? `${fmtTime(Math.min(...a.firstStarts)*60,false)}–${fmtTime(Math.max(...a.firstStarts)*60,false)}` : '—';
+  document.getElementById('analysis-notes').innerHTML =
+    `Reparto actual → ${mix}<br>Franja histórica de la 1ª entrada del día: ${fs}. ` +
+    `Formato detectado: fecha <code>${a.paddedDay?'DD/MM/YYYY':'D/M/YYYY'}</code>, hora <code>${a.timeWithSecs?'HH:MM:SS':'HH:MM'}</code> (se respetará al insertar).`;
+}
+
+// --- 3. GENERAR ---
+function reroll(){ document.getElementById('opt-seed').value = Math.floor(Math.random()*100000); generate(); }
+
+function generate(){
+  const a = analysis; if(!a) return;
+  const seed = parseInt(document.getElementById('opt-seed').value,10) || 1;
+  rnd = mulberry32(seed);
+
+  const untilKey = document.getElementById('opt-until').value;
+  if(!untilKey){ msg('gen-msg','Indica la fecha final.','err'); return; }
+  const [pMin, pMax] = parseRange(document.getElementById('opt-perday').value, 3, 5);
+  const [fw0, fw1] = (function(){ const m=String(document.getElementById('opt-first-win').value).match(/(\d{1,2}):(\d{2})\s*[-–]\s*(\d{1,2}):(\d{2})/); return m ? [(+m[1])*60+(+m[2]), (+m[3])*60+(+m[4])] : [6*60+45, 7*60+10]; })();
+  const [fd0, fd1] = parseRange(document.getElementById('opt-first-dur').value, 27, 33);
+  const mixParts = String(document.getElementById('opt-mix').value).split('/').map(x=>parseFloat(x)||0);
+  const [p5, p6, p4, pg] = [mixParts[0]??80, mixParts[1]??15, mixParts[2]??4, mixParts[3]??1];
+  const allowBlood = document.getElementById('opt-blood').checked;
+  const fillGaps = document.getElementById('opt-gaps').checked;
+
+  // días objetivo: sin registros, entre (inicio) y la fecha final
+  const startKey = fillGaps ? a.firstKey : a.lastKey;
+  const targetKeys = [];
+  for(let d = keyToDate(startKey); dateToKey(d) <= untilKey; d.setDate(d.getDate()+1)){
+    const k = dateToKey(d);
+    if(!a.byDay[k]) targetKeys.push(k);
+  }
+  if(targetKeys.length===0){ msg('gen-msg','No hay ningún día vacío en ese rango: no hay nada que generar.','info'); document.getElementById('card-preview').style.display='none'; return; }
+
+  // nº de entradas por día, preservando la media histórica
+  const D = targetKeys.length;
+  const meanTarget = Math.min(pMax, Math.max(pMin, a.meanPerDay));
+  let counts = new Array(D).fill(pMin);
+  let extra = Math.round(meanTarget*D) - pMin*D;
+  extra = Math.max(0, Math.min(extra, (pMax-pMin)*D));
+  const idxPool = shuffle(counts.map((_,i)=>i));
+  let p = 0;
+  while(extra > 0){
+    const i = idxPool[p % D]; p++;
+    if(counts[i] < pMax){ counts[i]++; extra--; }
+    if(p > D*(pMax-pMin)+D) break;
+  }
+
+  const total = counts.reduce((x,y)=>x+y,0);
+  const sum = p5+p6+p4+pg || 100;
+  let nGas = Math.round(total*pg/sum), n4 = Math.round(total*p4/sum), n6 = Math.round(total*p6/sum);
+  n4 = Math.min(n4, D); // como mucho un tipo 4 por día (y esos días se quedan sin tipo 6)
+  let n5 = total - nGas - n4 - n6;
+  if(n5 < 0){ n6 = Math.max(0, n6 + n5); n5 = total - nGas - n4 - n6; }
+
+  // asignación de tipos con la regla: nunca tipo 6 el mismo día que un tipo 4
+  const slots = [];
+  counts.forEach((c,di)=>{ for(let s=0;s<c;s++) slots.push({day:di, idx:s, type:null}); });
+  const dayHasT4 = new Array(D).fill(false);
+  shuffle(counts.map((_,i)=>i)).slice(0, n4).forEach(di=>{
+    dayHasT4[di] = true;
+    const cand = slots.filter(s=>s.day===di && s.type===null);
+    pick(cand).type = T4;
+  });
+  const t6cand = shuffle(slots.filter(s=>s.type===null && !dayHasT4[s.day]));
+  const placed6 = Math.min(n6, t6cand.length);
+  for(let i=0;i<placed6;i++) t6cand[i].type = T6;
+  const gasCand = shuffle(slots.filter(s=>s.type===null && s.idx>0)); // los gases nunca son la entrada larga de la mañana
+  const placedGas = Math.min(nGas, gasCand.length);
+  for(let i=0;i<placedGas;i++) gasCand[i].type = 'GAS';
+  slots.forEach(s=>{ if(s.type===null) s.type = T5; });
+
+  // horas y duraciones
+  const rows = [];
+  const laterStarts = analysis.laterStarts, laterDurs = analysis.laterDurs;
+  targetKeys.forEach((k, di)=>{
+    const dt = keyToDate(k);
+    const c = counts[di];
+    const daySlots = slots.filter(s=>s.day===di).sort((x,y)=>x.idx-y.idx);
+
+    // 1ª entrada: franja fija + ~30 min
+    const firstStart = (ri(fw0, fw1))*60 + ri(0,59);
+    const firstDur = ri(fd0*60, fd1*60);
+    const times = [{start:firstStart, dur:firstDur}];
+
+    // resto: muestreadas del histórico + jitter, con separación mínima
+    const sampled = [];
+    for(let i=1;i<c;i++) sampled.push(pick(laterStarts)*60 + ri(-12,12)*60 + ri(0,59));
+    sampled.sort((x,y)=>x-y);
+    let prevEnd = firstStart + firstDur;
+    sampled.forEach((st, i)=>{
+      const isGas = daySlots[i+1].type === 'GAS';
+      let dur = isGas ? ri(60, 300) : Math.round(pick(laterDurs) * (0.85 + rnd()*0.3));
+      dur = Math.max(60, Math.min(2400, dur));
+      let start = Math.max(st, prevEnd + 25*60);
+      if(start + dur > 23*3600 + 50*60) start = 23*3600 + 50*60 - dur;
+      if(start < prevEnd + 10*60) start = prevEnd + 10*60;
+      times.push({start, dur});
+      prevEnd = start + dur;
+    });
+
+    times.forEach((t, i)=>{
+      const s = daySlots[i];
+      const isGas = s.type === 'GAS';
+      const type = isGas ? 'No aplica' : s.type;
+      const t6 = s.type === T6;
+      const pPain = (t6 && analysis.rates.painT6!=null) ? analysis.rates.painT6 : analysis.rates.pain;
+      const pUrg  = (t6 && analysis.rates.urgencyT6!=null) ? analysis.rates.urgencyT6 : analysis.rates.urgency;
+      rows.push({
+        day: fmtDay(dt, analysis.paddedDay),
+        start_time: fmtTime(t.start, analysis.timeWithSecs),
+        end_time: fmtTime(t.start + t.dur, analysis.timeWithSecs),
+        duration: fmtDur(t.dur),
+        category: isGas ? CAT_GAS : CAT_FULL,
+        type: type,
+        pain: (!isGas && rnd() < pPain) ? 'Sí' : 'No',
+        urgency: (rnd() < pUrg) ? 'Sí' : 'No',
+        blood: (allowBlood && !isGas && rnd() < analysis.rates.blood) ? 'Sí' : 'No',
+        _key: k, _secs: t.dur
+      });
+    });
+  });
+
+  proposal = rows;
+  msg('gen-msg', `Generadas <b>${rows.length}</b> entradas para <b>${D}</b> días (${targetKeys[0].split('-').reverse().join('/')} → ${targetKeys[D-1].split('-').reverse().join('/')}).`, 'ok');
+  renderPreview(D);
+  document.getElementById('card-preview').style.display='';
+  document.getElementById('btn-insert').disabled = false;
+  msg('insert-msg','', 'info');
+}
+
+function renderPreview(D){
+  const rows = proposal;
+  const secs = rows.reduce((a,r)=>a+r._secs,0);
+  const cnt = t => rows.filter(r => t==='GAS' ? r.category===CAT_GAS : String(r.type).startsWith(t)).length;
+  const boxes = [
+    ['Entradas nuevas', rows.length, ''],
+    ['Días', D, ''],
+    ['Veces/día', (rows.length/D).toFixed(2), `hist. ${analysis.meanPerDay.toFixed(2)}`],
+    ['T. medio/visita', fmtMS(secs/rows.length), `hist. ${fmtMS(analysis.meanDur)}`],
+    ['T. medio/día', fmtMS(secs/D), `hist. ${fmtMS(analysis.meanDayTime)}`],
+    ['Dolor', Math.round(rows.filter(r=>r.pain==='Sí').length/rows.length*100)+'%', `hist. ${(analysis.rates.pain*100).toFixed(0)}%`],
+    ['Urgencia', Math.round(rows.filter(r=>r.urgency==='Sí').length/rows.length*100)+'%', `hist. ${(analysis.rates.urgency*100).toFixed(0)}%`],
+    ['Sangre', rows.filter(r=>r.blood==='Sí').length, '']
+  ];
+  document.getElementById('preview-grid').innerHTML = boxes.map(b=>`<div class="box"><span class="lbl">${b[0]}</span><div class="val">${b[1]}</div>${b[2]?`<small>${b[2]}</small>`:''}</div>`).join('');
+  const pc = n => (n/rows.length*100).toFixed(1)+'%';
+  const conflictDays = new Set();
+  const byDay = {};
+  rows.forEach(r=>{ (byDay[r._key]=byDay[r._key]||[]).push(r); });
+  Object.entries(byDay).forEach(([k,list])=>{
+    if(list.some(r=>r.type===T4) && list.some(r=>r.type===T6)) conflictDays.add(k);
+  });
+  document.getElementById('preview-mix').innerHTML =
+    `Reparto generado → <span class="t5">Tipo 5: ${cnt('Tipo 5')} (${pc(cnt('Tipo 5'))})</span> · <span class="t6">Tipo 6: ${cnt('Tipo 6')} (${pc(cnt('Tipo 6'))})</span> · <span class="t4">Tipo 4: ${cnt('Tipo 4')} (${pc(cnt('Tipo 4'))})</span> · <span class="tg">Solo gases: ${cnt('GAS')} (${pc(cnt('GAS'))})</span><br>` +
+    (conflictDays.size ? `<b style="color:#dc2626">⚠️ ${conflictDays.size} día(s) con tipo 4 y tipo 6 juntos</b>` : `✅ Ningún día mezcla tipo 4 con tipo 6.`);
+
+  const head = '<tr><th>Día</th><th>Inicio</th><th>Fin</th><th>Duración</th><th>Categoría</th><th>Tipo</th><th>Dolor</th><th>Urg.</th><th>Sangre</th></tr>';
+  const body = rows.map(r=>`<tr><td>${r.day}</td><td>${r.start_time}</td><td>${r.end_time}</td><td>${r.duration}</td><td>${r.category}</td><td>${r.type.split(':')[0]}</td><td>${r.pain}</td><td>${r.urgency}</td><td>${r.blood}</td></tr>`).join('');
+  document.getElementById('preview-table').innerHTML = head + body;
+}
+
+// --- 4. INSERTAR ---
+function cleanRows(){ return proposal.map(({_key,_secs,...r})=>r); }
+
+async function doInsert(){
+  if(!proposal || !proposal.length) return;
+  const days = new Set(proposal.map(r=>r._key)).size;
+  if(!confirm(`Se van a insertar ${proposal.length} entradas nuevas en ${days} días.\n\n¿Confirmas? Esta acción escribe en Supabase.`)) return;
+  const btn = document.getElementById('btn-insert'); btn.disabled = true;
+  const rows = cleanRows();
+  const CHUNK = 50; let done = 0;
+  for(let i=0;i<rows.length;i+=CHUNK){
+    const batch = rows.slice(i, i+CHUNK);
+    msg('insert-msg', `Insertando… ${done}/${rows.length}`, 'info');
+    const { error } = await myDb.from('tracker_digestivo').insert(batch);
+    if(error){ msg('insert-msg', `Error tras insertar ${done} filas: ${error.message}`, 'err'); return; }
+    done += batch.length;
+  }
+  msg('insert-msg', `✅ Insertadas ${done} entradas. Abre la app y comprueba el historial. (Vuelve a pulsar "1 · Leer base de datos" si quieres regenerar sin duplicar.)`, 'ok');
+  proposal = null;
+}
+
+function downloadSQL(){
+  if(!proposal) return;
+  const esc = v => "'" + String(v).replace(/'/g, "''") + "'";
+  const cols = ['day','start_time','end_time','duration','category','type','pain','urgency','blood'];
+  const values = cleanRows().map(r => '  (' + cols.map(c=>esc(r[c])).join(', ') + ')').join(',\n');
+  const sql = `-- Entradas generadas por generador.html\nINSERT INTO tracker_digestivo (${cols.join(', ')}) VALUES\n${values};\n`;
+  const blob = new Blob([sql], {type:'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = 'entradas_generadas.sql'; a.click();
+  URL.revokeObjectURL(a.href);
+}
+</script>
+</body>
+</html>
