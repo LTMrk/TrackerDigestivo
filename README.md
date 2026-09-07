@@ -35,7 +35,11 @@ Este es el uso normal, en el momento:
 
 El cronómetro sobrevive a que cierres la pestaña o bloquees el móvil: al volver a abrir la
 app sigue contando por donde iba. Si ya lo habías parado pero no guardaste, te devuelve
-directamente al formulario.
+directamente al formulario. El botón **Descartar** tira esa entrada a medias y te devuelve
+al inicio, por si arrancaste el cronómetro sin querer.
+
+**Mi Resumen sigue visible mientras cronometras**, así que siempre puedes consultar las
+medias sin tener que cerrar la entrada en curso.
 
 ### La evaluación
 

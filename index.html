@@ -64,6 +64,7 @@
       <h2>En proceso... ⏳</h2>
       <div id="live-timer" class="timer-display">00:00</div>
       <button class="stop" onclick="finishTracking()">Finalizar Entrada</button>
+      <button class="secondary" onclick="cancelTracking()">Descartar</button>
     </div>
     
     <div id="track-form" class="card hidden">
@@ -92,6 +93,7 @@
         <label style="color:#dc2626; font-weight:bold; font-size: 13px;">⚠️ ¿Sangre?</label><select id="blood"><option value="No">No</option><option value="Sí">Sí</option></select>
       </div>
       <button class="save" onclick="saveNewRecord()">Guardar Registro</button>
+      <button class="secondary" onclick="cancelTracking()">Descartar</button>
       <p id="status-track"></p>
     </div>
 
@@ -238,10 +240,25 @@
     }
 
     function hideAllTrackScreens() {
-      document.getElementById('track-start').classList.add('hidden'); 
-      document.getElementById('track-process').classList.add('hidden'); 
+      document.getElementById('track-start').classList.add('hidden');
+      document.getElementById('track-process').classList.add('hidden');
       document.getElementById('track-form').classList.add('hidden');
-      document.getElementById('dashboard-section').classList.add('hidden');
+    }
+
+    // Borra solo lo del cronómetro. Un localStorage.clear() se llevaría por
+    // delante la sesión de Supabase, que también vive aquí, y te echaría fuera.
+    function clearTracking() {
+      clearInterval(timerInterval);
+      localStorage.removeItem('poop_startTime');
+      localStorage.removeItem('poop_endTime');
+    }
+
+    function cancelTracking() {
+      if (!confirm('¿Descartar esta entrada sin guardarla?')) return;
+      clearTracking();
+      hideAllTrackScreens();
+      document.getElementById('track-start').classList.remove('hidden');
+      document.getElementById('status-track').innerText = "";
     }
 
     function startLiveTimer() {
@@ -296,9 +313,8 @@
       
       const { error } = await myDb.from('tracker_digestivo').insert([newData]);
       if (!error) {
-        localStorage.clear(); document.getElementById('status-track').innerText = ""; 
-        hideAllTrackScreens(); document.getElementById('track-start').classList.remove('hidden'); 
-        document.getElementById('dashboard-section').classList.remove('hidden');
+        clearTracking(); document.getElementById('status-track').innerText = "";
+        hideAllTrackScreens(); document.getElementById('track-start').classList.remove('hidden');
         fetchDataAndRender('home');
       } else {
         document.getElementById('status-track').innerText = "Error al guardar.";
