@@ -83,6 +83,41 @@ recién descargados.
 
 ---
 
+## Para la consulta
+
+Debajo del resumen hay un segundo bloque con los datos que suele pedir un digestivo,
+calculados sobre los **últimos 30 días**. A diferencia del resumen de arriba, aquí solo
+cuentan como deposición las de categoría «Deposición completa»: los gases y los intentos
+fallidos se contabilizan aparte, porque incluirlos falsearía la frecuencia.
+
+Arriba, una barra con el reparto de la **escala de Bristol** en tres tramos: duras (1-2),
+normales (3-4) y blandas (5-7).
+
+| Indicador | Por qué importa |
+|---|---|
+| **Deposiciones/día** | Frecuencia real, sin contar gases ni falsas alarmas |
+| **Bristol medio** | Consistencia media; por debajo de 3 tira a estreñimiento, por encima de 4 a tránsito acelerado |
+| **Días ≥3 dep.** | Cuántos días alcanzan el umbral habitual de diarrea |
+| **Días sin dep.** | La cara opuesta: días sin ninguna deposición |
+| **Racha sin dep.** | Días seguidos sin deposición, el dato de estreñimiento |
+| **Nocturnas 0-6h** | Despertarse a defecar orienta a causa orgánica más que funcional |
+| **Urgencia** | Porcentaje de deposiciones con urgencia |
+| **Dolor** | Porcentaje con dolor |
+| **Agrupadas <1h** | Deposiciones encadenadas: sugieren evacuación incompleta |
+| **Visitas >15 min** | Tiempo prolongado, asociado a dificultad para evacuar |
+| **Intentos fallidos** | Ir sin conseguir nada, equivalente a tenesmo |
+| **Sangre (total)** | Episodios en todo el histórico y fecha del último |
+
+Las casillas de **nocturnas** y **sangre** se ponen en rojo si hay algún caso.
+
+El botón **Copiar informe** deja en el portapapeles un resumen en texto plano con todos
+esos datos, listo para pegarlo en un correo o enseñarlo en la consulta. Si el navegador
+no deja copiar, el texto aparece en un cuadro para seleccionarlo a mano.
+
+Son recuentos de lo registrado, no una interpretación médica.
+
+---
+
 ## Historial
 
 En **📅 Historial** está la lista completa, ordenada por la fecha y la hora del propio

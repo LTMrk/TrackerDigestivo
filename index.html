@@ -35,6 +35,14 @@
     .flex-col { flex: 1; display: flex; flex-direction: column; }
     .flex-col label { margin-bottom: 2px; font-size: 12px; }
     .flex-row input { margin-bottom: 0; }
+    .bristol-bar { display: flex; height: 24px; border-radius: 6px; overflow: hidden; margin: 8px 0 6px; background: #e5e7eb; }
+    .bristol-bar span { display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; color: #fff; white-space: nowrap; }
+    .bb-duro { background: #92400e; } .bb-normal { background: #10b981; } .bb-blando { background: #ea580c; }
+    .leyenda { display: flex; justify-content: space-between; font-size: 10px; color: #6b7280; margin-bottom: 10px; }
+    .leyenda b { display: block; color: #1f2937; font-size: 11px; }
+    .stat-box.flag { border-top-color: #dc2626; background: #fef2f2; }
+    .stat-box.flag .stat-val { color: #dc2626; }
+    .nota { font-size: 10px; color: #9ca3af; line-height: 1.4; margin: 10px 0 0; }
   </style>
 </head>
 <body>
@@ -114,6 +122,39 @@
       <div id="dash-topTypes" style="background:#f9fafb; padding:8px; border-radius:6px; font-size:11px; margin-top:8px; border: 1px solid #e5e7eb; display:flex; justify-content:space-evenly; color:#4b5563;">
         Cargando tendencias...
       </div>
+    </div>
+
+    <div id="clinic-section" class="card hidden">
+      <h2 style="margin-bottom:2px;">Para la consulta 🩺</h2>
+      <p style="font-size:11px; color:#6b7280; margin:0 0 8px;">Últimos 30 días<span id="clin-cobertura"></span></p>
+
+      <div style="font-size:12px; font-weight:bold; color:#4b5563;">Forma de las heces (Bristol)</div>
+      <div class="bristol-bar" id="clin-bar"></div>
+      <div class="leyenda">
+        <div>Duras 1-2<b id="clin-duras">–</b></div>
+        <div style="text-align:center;">Normales 3-4<b id="clin-normales">–</b></div>
+        <div style="text-align:right;">Blandas 5-7<b id="clin-blandas">–</b></div>
+      </div>
+
+      <div class="grid-stats">
+        <div class="stat-box"><span class="stat-lbl">Deposiciones/día</span><div id="clin-depDia" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Bristol medio</span><div id="clin-bristolMedio" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Días ≥3 dep.</span><div id="clin-dias3" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Días sin dep.</span><div id="clin-diasSin" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Racha sin dep.</span><div id="clin-racha" class="stat-val">...</div></div>
+        <div class="stat-box" id="clin-box-noct"><span class="stat-lbl">Nocturnas 0-6h</span><div id="clin-nocturnas" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Urgencia</span><div id="clin-urgencia" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Dolor</span><div id="clin-dolor" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Agrupadas &lt;1h</span><div id="clin-agrupadas" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Visitas &gt;15 min</span><div id="clin-largas" class="stat-val">...</div></div>
+        <div class="stat-box"><span class="stat-lbl">Intentos fallidos</span><div id="clin-fallidos" class="stat-val">...</div></div>
+        <div class="stat-box" id="clin-box-sangre"><span class="stat-lbl">Sangre (total)</span><div id="clin-sangre" class="stat-val">...</div></div>
+      </div>
+
+      <button class="secondary" onclick="copiarInforme()">Copiar informe</button>
+      <textarea id="clin-texto" class="hidden" rows="14" style="width:100%; font-family:monospace; font-size:11px; margin-top:8px;"></textarea>
+      <p class="nota">Son recuentos de lo que tú has registrado, no una interpretación médica.
+      Las deposiciones nocturnas, la sangre y un cambio sostenido del patrón son motivo de consulta.</p>
     </div>
   </div>
 
@@ -363,6 +404,136 @@
       document.getElementById('blood-banner').classList[stats.global.bloodAlerts > 0 ? 'remove' : 'add']('hidden');
       
       document.getElementById('dash-topTypes').innerHTML = stats.topTypes.length === 0 ? "Sin datos." : stats.topTypes.map((t,i) => `<b>${i+1}.</b> ${t.name.split(':')[0]} (${t.count})`).join(' &nbsp;|&nbsp; ');
+
+      renderClinical(data);
+    }
+
+    // --- INDICADORES CLÍNICOS ---
+    // Solo cuentan como deposición las de categoría "Deposición completa": los
+    // gases y los intentos fallidos no son deposiciones y falsearían la frecuencia.
+    var informeTexto = "";
+
+    function renderClinical(data) {
+      const box = document.getElementById('clinic-section');
+      const bristolDe = t => { const m = String(t || '').match(/Tipo\s*(\d)/); return m ? +m[1] : null; };
+      const segDe = d => { const m = String(d || '').match(/(\d+)m\s*(\d+)s/); return m ? (+m[1]) * 60 + (+m[2]) : 0; };
+      const si = v => v === 'Sí' || v === 'Si';
+      const clave = dt => dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+
+      const recs = data.map(r => ({
+        ts: recordStamp(r), dia: r.day, secs: segDe(r.duration), cat: r.category,
+        b: r.category === 'Deposición completa' ? bristolDe(r.type) : null,
+        dolor: si(r.pain), urg: si(r.urgency), sangre: si(r.blood)
+      })).filter(r => r.ts);
+
+      if (!recs.length) { box.classList.add('hidden'); return; }
+      box.classList.remove('hidden');
+
+      const finVentana = new Date(); finVentana.setHours(23, 59, 59, 999);
+      const iniVentana = new Date(finVentana); iniVentana.setDate(iniVentana.getDate() - 29); iniVentana.setHours(0, 0, 0, 0);
+      const primero = new Date(Math.min.apply(null, recs.map(r => r.ts))); primero.setHours(0, 0, 0, 0);
+      const desde = new Date(Math.max(iniVentana.getTime(), primero.getTime()));
+
+      const dias = [];
+      for (let d = new Date(desde); d <= finVentana; d.setDate(d.getDate() + 1)) dias.push(clave(d));
+      const nDias = dias.length || 1;
+
+      const ventana = recs.filter(r => r.ts >= desde.getTime());
+      const dep = ventana.filter(r => r.cat === 'Deposición completa').sort((a, b) => a.ts - b.ts);
+      const nDep = dep.length || 1;
+
+      const porDia = {};
+      dep.forEach(r => { const k = clave(new Date(r.ts)); porDia[k] = (porDia[k] || 0) + 1; });
+
+      const pct = (n, total) => Math.round((n / (total || 1)) * 100) + '%';
+      const conB = dep.filter(r => r.b);
+      const duras = conB.filter(r => r.b <= 2).length;
+      const normales = conB.filter(r => r.b === 3 || r.b === 4).length;
+      const blandas = conB.filter(r => r.b >= 5).length;
+      const medio = conB.length ? (conB.reduce((s, r) => s + r.b, 0) / conB.length) : 0;
+
+      // barra de Bristol: los tramos vacíos no se pintan y los estrechos van sin
+      // etiqueta, que si no se desborda sobre el tramo de al lado
+      const seg = (n, cls) => {
+        if (n === 0) return '';
+        const w = (n / conB.length) * 100;
+        return `<span class="${cls}" style="width:${w}%">${w >= 12 ? Math.round(w) + '%' : ''}</span>`;
+      };
+      document.getElementById('clin-bar').innerHTML = conB.length
+        ? seg(duras, 'bb-duro') + seg(normales, 'bb-normal') + seg(blandas, 'bb-blando') : '';
+      document.getElementById('clin-duras').innerText = duras + ' (' + pct(duras, conB.length) + ')';
+      document.getElementById('clin-normales').innerText = normales + ' (' + pct(normales, conB.length) + ')';
+      document.getElementById('clin-blandas').innerText = blandas + ' (' + pct(blandas, conB.length) + ')';
+
+      const diasConDep = Object.keys(porDia).length;
+      const diasSin = nDias - diasConDep;
+      let racha = 0, actual = 0;
+      dias.forEach(k => { if (porDia[k]) actual = 0; else { actual++; if (actual > racha) racha = actual; } });
+      const dias3 = dias.filter(k => (porDia[k] || 0) >= 3).length;
+      const nocturnas = dep.filter(r => new Date(r.ts).getHours() < 6).length;
+      const largas = dep.filter(r => r.secs > 900).length;
+      const fallidos = ventana.filter(r => r.cat === 'Intento fallido / Falsa alarma').length;
+
+      // agrupamiento: deposición que empieza a menos de una hora del final de la anterior
+      let agrupadas = 0;
+      for (let i = 1; i < dep.length; i++) {
+        if (clave(new Date(dep[i].ts)) !== clave(new Date(dep[i - 1].ts))) continue;
+        if (dep[i].ts - (dep[i - 1].ts + dep[i - 1].secs * 1000) < 3600000) agrupadas++;
+      }
+
+      const conSangre = recs.filter(r => r.sangre);
+      const ultSangre = conSangre.length ? conSangre.sort((a, b) => b.ts - a.ts)[0].dia : null;
+
+      const set = (id, v) => document.getElementById(id).innerText = v;
+      set('clin-cobertura', nDias < 30 ? ' · solo hay datos de ' + nDias + ' días' : '');
+      set('clin-depDia', (dep.length / nDias).toFixed(1));
+      set('clin-bristolMedio', medio ? medio.toFixed(1) : '–');
+      set('clin-dias3', dias3 + '/' + nDias);
+      set('clin-diasSin', diasSin + '/' + nDias);
+      set('clin-racha', racha + (racha === 1 ? ' día' : ' días'));
+      set('clin-nocturnas', String(nocturnas));
+      set('clin-urgencia', pct(dep.filter(r => r.urg).length, nDep));
+      set('clin-dolor', pct(dep.filter(r => r.dolor).length, nDep));
+      set('clin-agrupadas', pct(agrupadas, nDep));
+      set('clin-largas', pct(largas, nDep));
+      set('clin-fallidos', String(fallidos));
+      set('clin-sangre', conSangre.length ? conSangre.length + ' · ' + ultSangre : '0');
+      document.getElementById('clin-box-noct').classList[nocturnas > 0 ? 'add' : 'remove']('flag');
+      document.getElementById('clin-box-sangre').classList[conSangre.length > 0 ? 'add' : 'remove']('flag');
+
+      const minutosDia = dep.reduce((s, r) => s + r.secs, 0) / nDias / 60;
+      informeTexto = [
+        'TRACKER DIGESTIVO — ' + desde.toLocaleDateString('es-ES') + ' a ' + new Date().toLocaleDateString('es-ES') + ' (' + nDias + ' días)',
+        '',
+        'Deposiciones: ' + dep.length + ' (' + (dep.length / nDias).toFixed(1) + '/día)',
+        'Tiempo en el baño: ' + minutosDia.toFixed(0) + ' min/día de media',
+        'Bristol medio: ' + (medio ? medio.toFixed(1) : '–') +
+          '  |  duras 1-2: ' + duras + ' (' + pct(duras, conB.length) + ')' +
+          ', normales 3-4: ' + normales + ' (' + pct(normales, conB.length) + ')' +
+          ', blandas 5-7: ' + blandas + ' (' + pct(blandas, conB.length) + ')',
+        'Días con 3 o más deposiciones: ' + dias3 + '/' + nDias,
+        'Días sin deposición: ' + diasSin + '/' + nDias + ' (racha máxima: ' + racha + ')',
+        'Deposiciones nocturnas (0-6h): ' + nocturnas,
+        'Urgencia: ' + pct(dep.filter(r => r.urg).length, nDep) + '  |  Dolor: ' + pct(dep.filter(r => r.dolor).length, nDep),
+        'Agrupadas (<1h de la anterior): ' + pct(agrupadas, nDep),
+        'Visitas de más de 15 min: ' + pct(largas, nDep),
+        'Intentos fallidos / falsas alarmas: ' + fallidos,
+        'Sangre: ' + (conSangre.length ? conSangre.length + ' episodios, último el ' + ultSangre : 'ninguno registrado')
+      ].join('\n');
+    }
+
+    function copiarInforme() {
+      const ta = document.getElementById('clin-texto');
+      ta.value = informeTexto;
+      ta.classList.remove('hidden');
+      ta.select();
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(informeTexto)
+          .then(() => alert('Informe copiado al portapapeles.'))
+          .catch(() => alert('No he podido copiarlo solo: selecciónalo y cópialo del cuadro de abajo.'));
+      } else {
+        alert('Selecciona y copia el texto del cuadro de abajo.');
+      }
     }
 
     // --- HISTORIAL ---
